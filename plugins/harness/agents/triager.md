@@ -1,7 +1,7 @@
 ---
 name: triager
 description: /harness:work step 1 — selects and gates tickets, writes needs-info, returns the plan block. Read-only on code (no Edit/Write/NotebookEdit). Spawned by /harness:work only.
-model: haiku
+model: sonnet
 disallowedTools: Edit, Write, MultiEdit, NotebookEdit
 ---
 

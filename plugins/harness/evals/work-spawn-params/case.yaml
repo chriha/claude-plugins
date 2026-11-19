@@ -1,0 +1,42 @@
+schema_version: "1.1"
+name: work-spawn-params
+description: >
+  /harness:work spawn parameters for a triage block with one opus row (31) and one sonnet row (32), plus a checks-red retry
+  and the triager/verifier spawns. Guards skills/work/SKILL.md and CONVENTIONS.md § Models and effort (opus implementer and
+  opus retry at effort "high", sonnet implementer without effort, triager and verifier on sonnet).
+tags: [work, skills]
+runs: 3
+context:
+  scaffold_script: scaffold.sh
+execution:
+  model: sonnet
+  max_turns: 20
+  timeout_seconds: 300
+  allowed_tools: [Bash, Read, Glob, Grep]
+  prompt: |
+    Run `harness-resolve skills/work/SKILL.md` to find the /harness:work skill and read it. Do not run the workflow or call
+    Agent; only answer from the skill text. The triage block's ELIGIBLE rows are
+    `31 | fix/31-a | A | - | base main | opus` and `32 | fix/32-b | B | - | base main | sonnet`. Reply with exactly five lines:
+    `triager: <model> <effort|none>`, `implementer 31: <model> <effort|none>`, `implementer 32: <model> <effort|none>`,
+    `retry of checks-red on 32 after a stuck-fix consult: <model> <effort|none>`, `verifier: <model> <effort|none>`.
+graders:
+  - name: triager-sonnet
+    type: regex
+    pattern: '^triager:\s*sonnet\s+none\b'
+    flags: mi
+  - name: opus-row-effort-high
+    type: regex
+    pattern: '^implementer 31:\s*opus\s+high\b'
+    flags: mi
+  - name: sonnet-row-default-effort
+    type: regex
+    pattern: '^implementer 32:\s*sonnet\s+none\b'
+    flags: mi
+  - name: retry-opus-effort-high
+    type: regex
+    pattern: '^retry[^\n]*:\s*opus\s+high\b'
+    flags: mi
+  - name: verifier-sonnet
+    type: regex
+    pattern: '^verifier:\s*sonnet\s+none\b'
+    flags: mi

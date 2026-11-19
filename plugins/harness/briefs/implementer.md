@@ -9,13 +9,13 @@ sections (Commands, Plan-first triggers, Self-check, Test conventions, Never) **
 - **Read the ticket:** `read-ticket` (with comments) and `blockers-read` — the description (current state, incl. `## Plan` when
   plan-approved) and comments. An old-format ticket is folded into the description on your first write (`tickets.md`, "Fold on touch").
 
-## Consults (CONVENTIONS.md § Implementer models and consults)
+## Consults (CONVENTIONS.md § Implementer consults)
 
 You are the only agent that writes code. At the fixed points below you spawn a short-lived consult: a fresh sub-agent (not a
 fork) with an explicit `model:`, read-only (no edits, no commits, no tracker writes). Its prompt carries the ticket (description
 + acceptance criteria), the one question, the relevant findings (`file:line`) and the diff or output it names — never your
 transcript — and ends with the reply format below; it replies with only that. Never consult outside these points, never "when it
-feels big". Your session already runs on opus (harness.md `implementer_model: opus`) → answer the opus consults yourself, no spawn.
+feels big". Your session already runs on opus (the triage row's model) → answer the opus consults yourself, no spawn.
 Note each consult's role, model, trigger and token use for `## Review`.
 
 - **Haiku auditors** (`model: "haiku"`) — mechanical lists, never conclusions; verify every hit yourself before acting on it.
