@@ -438,7 +438,7 @@ rc=0; fgh repo delete x 2>/dev/null || rc=$?; eq "$rc" 1 "fake gh refuses unknow
 eq "$(sed -n 's/^issue edit 5 //p' "$tmp/ev/gh.log" | head -1)" "--add-label needs-info --body-file $tmp/ev/b.md" "fake gh logs calls"
 eq "$(tail -1 "$tmp/ev/gh.log")" 'repo delete x' "fake gh logs refused calls"
 
-# --- harness-candidates model (#34): sonnet unless harness.md § Models sets implementer_model: opus
+# --- harness-candidates model (#34): sonnet by default; the old implementer_model key is ignored, the triager brief owns the opus upgrade
 mkdir -p "$tmp/cand-ev/fixtures/issues" "$tmp/cand-bin"
 printf '{"number":7,"title":"planned","body":"## Plan\\nx","createdAt":"2026-01-01","state":"OPEN","labels":[],"assignees":[{"login":"eval-bot"}],"comments":[]}\n' \
     > "$tmp/cand-ev/fixtures/issues/7.json"
@@ -451,11 +451,12 @@ cand_model() { # cand_model <harness.md body>: model of eligible ticket 7 (plan-
 eq "$(cand_model '## Tracker
 tracker: github')" 'true/sonnet' "plan-approved row without the key runs sonnet"
 eq "$(cand_model '## Models
-implementer_model: opus')" 'true/opus' "implementer_model: opus picks opus"
-eq "$(cand_model '## Models
-implementer_model: `Opus`   <!-- opt-in -->')" 'true/opus' "implementer_model is case-insensitive"
-eq "$(cand_model '## Models
-implementer_model: gpt')" 'true/sonnet' "unknown implementer_model falls back to sonnet"
+implementer_model: opus')" 'true/sonnet' "a leftover implementer_model: opus no longer picks opus"
+tri="$bin/../briefs/triager.md"
+grep -q 'Upgrade a row to `opus` only for a \*\*clearly cross-module\*\*' "$tri" || fail "triager brief: cross-module opus upgrade rule"
+grep -q 'implementer_model' "$tri" "$bin/../CONVENTIONS.md" "$bin/../templates/harness.md" "$bin/../README.md" "$bin/../skills/work/SKILL.md" && fail "implementer_model still referenced"
+eq "$(sed -n 's/^model: //p' "$bin/../agents/triager.md")" sonnet "triager agent runs on sonnet"
+eq "$(sed -n 's/^model: //p' "$bin/../agents/verifier.md")" sonnet "verifier agent runs on sonnet"
 
 mkdir -p "$tmp/case/fixtures/issues" "$tmp/run" "$tmp/home" "$tmp/installed"
 cp "$tmp/ev/fixtures/issues/5.json" "$tmp/case/fixtures/issues/"

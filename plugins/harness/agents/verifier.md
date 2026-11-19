@@ -1,7 +1,7 @@
 ---
 name: verifier
 description: /harness:work step 3 — verifies one side finding against _main and files a triage ticket if real. Read-only on code (no Edit/Write/NotebookEdit). Spawned by /harness:work only.
-model: haiku
+model: sonnet
 disallowedTools: Edit, Write, MultiEdit, NotebookEdit
 ---
 

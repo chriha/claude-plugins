@@ -27,9 +27,9 @@ hands out ticket ids, spawns sub-agents, and passes short status lines between t
 
 | Agent (`subagent_type`) | Model | Does | Returns |
 |-------|-------|------|---------|
-| **triager** (`harness:triager`, no Edit/Write) | haiku | Step 1: select, gate, needs-info, overlap, chains | the plan block |
-| **implementer** (`harness:implementer`) | sonnet (opus only with harness.md `implementer_model: opus`) + haiku audit / opus consult sub-agents | Step 2: gate, worktree, code, commits, push, PR, tracker write-back — or a plan | one line |
-| **verifier** (`harness:verifier`, no Edit/Write) | haiku | Step 3: verify one finding, file a triage ticket if real | one line |
+| **triager** (`harness:triager`, no Edit/Write) | sonnet | Step 1: select, gate, needs-info, overlap, chains | the plan block |
+| **implementer** (`harness:implementer`) | the row's model: sonnet, opus (`effort: "high"`) for a cross-module ticket + haiku audit / opus consult sub-agents | Step 2: gate, worktree, code, commits, push, PR, tracker write-back — or a plan | one line |
+| **verifier** (`harness:verifier`, no Edit/Write) | sonnet | Step 3: verify one finding, file a triage ticket if real | one line |
 
 Briefs: run `harness-resolve briefs/<role>.md` once per role (`triager`, `implementer`, `verifier`) and use the absolute paths it
 prints (a project override wins automatically). Shared: `tickets.md`, `git-rules.md` beside them.
@@ -81,7 +81,7 @@ merged/closed PRs or branches deleted on origin (`issue-nnn merged|closed|delete
 
 ## Step 1 — Triage (one triager)
 
-Spawn one **triager** (`model: "haiku"`) with `<repo>` and the argument verbatim (if any). Wait. Keep `BASE_SHA`. Print Step 0's
+Spawn one **triager** (`model: "sonnet"`) with `<repo>` and the argument verbatim (if any). Wait. Keep `BASE_SHA`. Print Step 0's
 lists plus the triager's block, lightly formatted. With `--dry-run`, first write the run log (Step 4: Step 0 lines + triage block only), then stop.
 
 ### Blocked argument tickets — ask instead of dropping
@@ -98,7 +98,7 @@ each appears once, blockers first) and spawn a **fresh triager** with it. Its bl
 
 ## Step 2 — Implement (one implementer per ticket)
 
-Run **up to 3 implementers in parallel**, in `ELIGIBLE` order, each with the row's model. When one finishes, handle its findings
+Run **up to 3 implementers in parallel**, in `ELIGIBLE` order, each with the row's model: an `opus` row gets `model: "opus", effort: "high"`, a `sonnet` row gets `model: "sonnet"` and no `effort`. When one finishes, handle its findings
 (Step 3) and start the next eligible ticket. A chain takes one slot.
 
 **Budget** (`--budget N`): keep a count of PR-opening results (`done` + `partial`). Start a ticket only while that count +
@@ -114,7 +114,7 @@ Retry **once per ticket per run**, always with a changed condition:
 - `env/setup` → remove the worktree (`git -C <repo> worktree remove --force <wt>`; delete the branch only if nothing was pushed)
   and respawn the implementer so it recreates it.
 - `checks-red` on a **sonnet** row whose RESULT carries `· consult: stuck-fix` (the opus stuck-fix consult already ran and didn't
-  help) → respawn on `model: "opus"` in the same worktree.
+  help) → respawn with `model: "opus", effort: "high"` in the same worktree.
 - every other class, `checks-red` without `consult: stuck-fix`, `checks-red` already on opus, and a retry that also fails →
   report only.
 
@@ -128,7 +128,7 @@ Stacked: also the base ticket's `<base-wt>` and PR url. Add `no-verify` / `allow
 ## Step 3 — Verify findings (one verifier per finding)
 
 For each finding title in a RESULT line, skip it if it obviously matches one already sent this run; otherwise spawn a **verifier**
-(`model: "haiku"`). Verifiers are read-only on code, run in parallel with everything and don't count against the implementer limit —
+(`model: "sonnet"`). Verifiers are read-only on code, run in parallel with everything and don't count against the implementer limit —
 don't wait for them. Verifier prompt: the finding's short title, the source id, `<repo>`, `<wt>`, `<report>`, titles already in flight.
 Each verifier persists its verdict as a `<!-- finding-verdict -->` comment on the source ticket (`/harness:harness-retro` measures
 finding precision from them). New triage tickets are **not** worked in this run.

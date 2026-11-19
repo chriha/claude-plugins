@@ -9,13 +9,13 @@ sections (Commands, Plan-first triggers, Self-check, Test conventions, Never) **
 - **Read the ticket:** `read-ticket` (with comments) and `blockers-read` — the description (current state, incl. `## Plan` when
   plan-approved) and comments. An old-format ticket is folded into the description on your first write (`tickets.md`, "Fold on touch").
 
-## Consults (CONVENTIONS.md § Implementer models and consults)
+## Consults (CONVENTIONS.md § Implementer consults)
 
 You are the only agent that writes code. At the fixed points below you spawn a short-lived consult: a fresh sub-agent (not a
 fork) with an explicit `model:`, read-only (no edits, no commits, no tracker writes). Its prompt carries the ticket (description
 + acceptance criteria), the one question, the relevant findings (`file:line`) and the diff or output it names — never your
 transcript — and ends with the reply format below; it replies with only that. Never consult outside these points, never "when it
-feels big". Your session already runs on opus (harness.md `implementer_model: opus`) → answer the opus consults yourself, no spawn.
+feels big". Your session already runs on opus (the triage row's model) → answer the opus consults yourself, no spawn.
 Note each consult's role, model, trigger and token use for `## Review`.
 
 - **Haiku auditors** (`model: "haiku"`) — mechanical lists, never conclusions; verify every hit yourself before acting on it.
@@ -104,21 +104,28 @@ It fetches `origin/<base>`, adds the worktree (new branch from `origin/<base>`, 
   One commit by default; each commit leaves tests green.
 - **Review (once, before the push):** with every commit in and checks green, count the **changed lines** = insertions + deletions
   of `git -C <wt> diff --shortstat origin/<base>...HEAD -- . <tests, lockfiles, generated, exclude_from_size as
-  ':(exclude,glob)…'>`. Then spawn one fresh sonnet sub-agent (a new agent, not a fork). Its prompt carries the ticket's acceptance
-  criteria, the full `git -C <wt> diff origin/<base>...HEAD` and the commit log as author intent, and tells it: read-only (no
-  edits, no commits), apply `harness-resolve briefs/review-criteria.md` (rules compliance + test quality, signal threshold,
-  false-positive list) **without** its "Validation" step (the sign-off replaces it), and reply with its candidates, one per line as
-  `- [rules|test-quality] <file>:<line> — <problem; quote the rule if any> — <fix>`, or `none`.
+  ':(exclude,glob)…'>`. Then spawn one fresh **opus rules-review** sub-agent (`model: "opus"`, a new agent, not a fork). Its prompt
+  carries the ticket's acceptance criteria, the full `git -C <wt> diff origin/<base>...HEAD` and the commit log as author intent,
+  and tells it: read-only (no edits, no commits); apply `harness-resolve briefs/review-criteria.md` (rules compliance + test
+  quality, signal threshold, false-positive list) **including** its Validation step: it spawns one fresh sonnet sub-agent per
+  candidate (author intent + the candidate) that replies `confirmed-high | confirmed-low | dropped — <why>`; it drops `dropped`
+  and re-validates every `confirmed-low` and every hot-path candidate itself (hot path = code that handles auth, money or data
+  loss, or a path harness.md § Plan-first triggers names), keeping it only when it still holds. It replies with the surviving
+  findings, one per line as `- [rules|test-quality] <file>:<line> — <problem; quote the rule if any> — <fix>`, or `none`, then a
+  last line `counts: candidates <n> · confirmed-high <n> · confirmed-low <n> · dropped <n> · kept <n>`.
   - **Bug review, in parallel:** in the same message as the sub-agent spawn, run `/code-review <level> <branch>` yourself (Skill
     tool, cwd `<wt>`; read-only, no `--fix`/`--comment`) — no wrapper sub-agent. Always pass `<level>`: **changed lines ≤ 200 →
     `low`, > 200 → `medium`**. Never `high` or above. Map each finding it reports to
     `- [code-review] <file>:<line> — <problem> — <fix>` (its file, line and description; the fix from its suggestion, else one
     line of your own), or `none`.
-  - Merge both reviewers' findings, drop duplicates (same file:line or problem).
+  - Merge both reviewers' findings, drop duplicates (same file:line or problem). The rules-review findings are already
+    validated: nothing validates them a second time.
   - **Sign-off** consult (opus when changed lines > 200 or `plan approved`, else sonnet). Gets: the acceptance criteria, the diff,
-    the commit log, the merged findings. It drops false positives (review-criteria "False positives"), adds misses it can show
-    (source `intent` when the diff misses an acceptance criterion) and replies: `- keep|drop <finding> — <one line why>` per
-    finding, then `- add [<source>] <file>:<line> — <problem> — <fix>` per miss, or `none`.
+    the commit log, the merged findings, marking which came from the rules-review agent (validated) and which from `/code-review`
+    (not). It checks only the `/code-review` findings against the false-positive list (review-criteria "False positives"), accepts
+    the rules-review findings as given, adds misses it can show (source `intent` when the diff misses an acceptance criterion)
+    and replies: `- keep|drop <finding> — <one line why>` per `/code-review` finding, then `- add [<source>] <file>:<line> —
+    <problem> — <fix>` per miss, or `none`.
   - Fix each kept or added in-scope finding in one extra commit, then re-run the checks. An out-of-scope finding goes under
     `## Findings`.
   - **Re-check** (only when there was a fix commit): the same sign-off model once more, with the kept/added findings and
@@ -126,7 +133,7 @@ It fetches `origin/<base>`, adds the worktree (new branch from `origin/<base>`, 
     a re-run still red after the 3-attempt budget, goes under `## Open` and the status is `partial`.
   - Record in the report's `## Review`: one line per finding the sign-off kept or added, `- [<source>] <file>:<line> — fixed |
     out of scope | open`, where `<source>` is `rules`, `test-quality` (both from the review-criteria reviewer), `code-review` or
-    `intent`; `none` when there are none. Then the `/code-review` level, changed-line count and the review-criteria sub-agent's token use,
+    `intent`; `none` when there are none. Then the `/code-review` level, changed-line count, the rules-review agent's `counts:` line verbatim and its token use,
     and one line per consult of this run: `- consult: <auditor|advisor> · <haiku|sonnet|opus> · <lookup|audit|gate|plan|stuck-fix|
     sign-off|re-check> · <n>k tokens`. `harness-retro` counts these tags and consult lines.
 - **Verify before the PR (unless `no-verify` or harness.md has no `## Verify` section):** after checks are green and before pushing,
@@ -183,7 +190,7 @@ done | partial | blocked | planned | needs-info — for partial/blocked add `cla
 ## Tests
 <commands run + result; for bug fixes, the red run before the fix; static/format results>
 ## Review
-<`- [rules|test-quality|code-review|intent] file:line — fixed | out of scope | open` per finding, or "none"; code-review level, changed lines, review-criteria sub-agent tokens; `- consult: <role> · <model> · <trigger> · <n>k tokens` per consult>
+<`- [rules|test-quality|code-review|intent] file:line — fixed | out of scope | open` per finding, or "none"; code-review level, changed lines, the rules-review agent's `counts:` line and tokens; `- consult: <role> · <model> · <trigger> · <n>k tokens` per consult>
 ## Verify
 <passed|failed|aborted|skipped + one line each, or "not run">
 ## Open

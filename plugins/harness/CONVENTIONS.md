@@ -21,7 +21,6 @@ Sections the briefs refer to by name — keep these headings:
 - `## Test conventions` — what a good test looks like here (feeds `review-criteria.md` "Test quality").
 - `## Review triggers` — extra "a human must review this PR" cases for `/harness:triage-prs` (CODEOWNERS paths count already).
 - `## Never` — hard rules (deps changes need approval, no migrations without plan, ...).
-- `## Models` — `implementer_model:` `sonnet` (default) | `opus` (whole-session opus implementer; see § Implementer models and consults).
 Missing section = generic defaults apply. The briefs say "per harness.md § <Section>".
 
 ## Tracker / forge adapters
@@ -53,12 +52,31 @@ not to happen:
   prefix patterns can't catch combined flags (`-uf`) — the guard does.
 - A new hard rule → add it to the brief **and** to `harness-guard` with a test (and to `deny` when a permission pattern can express it).
 
-## Implementer models and consults
-`harness-candidates`, the triager, `/harness:work`, the implementer brief (§ Consults) and `harness-retro` follow it.
-The implementer session runs on **sonnet** and is the only agent that writes code. `implementer_model: opus` in harness.md
-§ Models opts a project in to a whole-session opus implementer (default `sonnet`; nothing else picks opus for the session — not
-plan-approved rows, not the triager). The session calls short-lived consult sub-agents; each prompt carries the ticket, the
-specific question, the relevant findings and the diff — never the session transcript — and the brief fixes the reply format.
+## Models and effort
+One scheme for every agent and skill; `harness-candidates`, the triager, `/harness:work`, the skills' `model:` frontmatter, the
+implementer brief (§ Consults) and `harness-retro` follow it. There is no per-project model key.
+- **Triager and verifier** (`agents/{triager,verifier}.md`, spawned with `model: "sonnet"`) run on sonnet — haiku is too weak for
+  gating and verification.
+- **Implementer** — the triage row carries its model. `bin/harness-candidates` defaults every row to **sonnet**; the triager
+  upgrades a row to **opus** only for a clearly cross-module ticket (the ticket or its `## Plan` / `## Touches` spans several
+  modules or layers, or changes a shared interface). Plan-approved alone does not pick opus. `/harness:work` spawns an opus
+  implementer with `effort: "high"` and a sonnet implementer at the default effort (no `effort`). The `checks-red` retry on opus
+  also runs with `effort: "high"`.
+- All sub-agents keep their plugin agent type (`harness:triager|implementer|verifier`) and `run_in_background: true`.
+- **Skills** declare `model:` in their frontmatter: `work`, `review`, `work-on-comments`, `triage`, `triage-prs`, `init`,
+  `doctor`, `harness-retro` → **sonnet**; `ticket`, `arch-loop` → **opus**; `verify` → **opus** with `effort: high`.
+  `init`, `doctor` and `harness-retro` are mechanical file/CLI work and report formatting; `arch-loop` judges architecture drift.
+- `/harness:ticket`'s plan-grill step spawns one fresh read-only opus sub-agent (not a fork); plan optimisation keeps naming
+  haiku/sonnet/opus per slice.
+- `/harness:work-on-comments`: one sonnet sub-agent per comment (opus for a complex or disputed one), sonnet fixers for quick fixes,
+  opus fixers for complex ones, and a fresh opus check over the commits it made.
+- `/harness:review`: haiku lists the relevant CLAUDE.md paths, sonnet reviewers and validators, one opus re-validation over
+  confirmed-low and hot-path findings.
+
+## Implementer consults
+The implementer session is the only agent that writes code. It calls short-lived consult sub-agents; each prompt carries the
+ticket, the specific question, the relevant findings and the diff — never the session transcript — and the brief fixes the reply
+format. A session that already runs on opus answers the opus consults itself, no spawn.
 - **Haiku auditor** — mechanical, checkable work only; replies are lists of `file:line`, never conclusions: the Self-check audits
   over the diff (functions that don't exist, duplicated helpers, swallowed errors, unquoted shell/SQL), caller and sibling-pattern
   lookups, the scope/size check (files the ticket doesn't name, the ~400-line limit). Run in parallel in one message. Gate
@@ -69,12 +87,17 @@ specific question, the relevant findings and the diff — never the session tran
   3. **Stuck fix** — after the 2nd failed attempt of the 3-attempt fix budget → a diagnosis from the failing output and the diff.
      The `checks-red` retry respawns the implementer on opus only when this consult already ran (its RESULT carries
      `· consult: stuck-fix` after the class).
-  4. **Sign-off** — replaces the per-finding validators of the review step: gets both reviewers' merged findings and the diff,
-     drops false positives, adds misses, and does one short re-check after the fix commit. Opus when changed lines > 200 (the
+  4. **Sign-off** — gets both reviewers' merged findings and the diff, drops false positives among the `/code-review` findings
+     (the rules-review agent's are already validated), adds misses, and does one short re-check after the fix commit. Opus when changed lines > 200 (the
      review step's count after `exclude_from_size`, same cutoff as the `/code-review` level) or the ticket is plan-approved;
      sonnet otherwise.
-- The report's `## Review` records each consult (role, model, trigger) and its token use next to the review sub-agents' tokens;
-  `harness-retro` counts them.
+- **Rules review** (implementer Review step, not a consult): one fresh read-only **opus** sub-agent applies
+  `briefs/review-criteria.md` including Validation — one sonnet validator per candidate (`confirmed-high | confirmed-low |
+  dropped`), the opus agent itself re-validates `confirmed-low` and hot-path candidates — and replies with the surviving findings
+  plus a `counts:` line. `/code-review` runs in parallel in the same message. The sign-off never re-validates the rules-review
+  findings, so no finding is validated twice.
+- The report's `## Review` records each consult (role, model, trigger) and its token use next to the rules-review agent's `counts:` line and
+  tokens; `harness-retro` counts them.
 
 ## Behaviour is checked by evals
 `tests/run.sh` covers `bin/`; `evals/<case>/case.yaml` (`claude plugin eval`) covers how agents behave under a brief/skill.

@@ -18,7 +18,9 @@ Your judgment calls on top of it:
   missing **concretely** into `## Open questions` (questions with options) and `## Status` (editing rules in `tickets.md`), then a
   `Changed` comment. Drop it from `ELIGIBLE` (and the rest of its chain, as `BLOCKED`: `not eligible: needs-info`).
   When in doubt it's eligible — the implementer runs the full readiness gate.
-- **Model** — the script's `model` as is (harness.md § Models; never upgrade it — opus is a per-project opt-in).
+- **Model** — the script's `model` (sonnet by default). Upgrade a row to `opus` only for a **clearly cross-module** ticket: its
+  description, `## Plan` or `## Touches` names files in several modules/layers, or it changes a shared interface (CONVENTIONS.md
+  § Models and effort). Plan-approved alone, or a doubt, stays sonnet. Never downgrade.
 
 **Overlap check** — tickets run in parallel off the same base. If two eligible tickets clearly touch the same code (per their
 descriptions incl. `## Plan` / `## Touches`), keep the higher-priority (then older) one and mark the other **held — overlaps <id>**.

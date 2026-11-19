@@ -39,11 +39,11 @@ Invoke as `/harness:<name>`.
 
 ## Models
 
-The implementer session runs on sonnet; haiku sub-agents do the mechanical audits (Self-check over the diff, caller lookups,
-scope/size), and opus is consulted at four fixed points: an uncertain gate, writing the plan, after the 2nd failed fix attempt,
-and the review sign-off (opus above 200 changed lines or on plan-approved tickets, sonnet otherwise). To run the whole implementer session on opus instead,
-set `implementer_model: opus` under `## Models` in `.claude/harness.md` (default `sonnet`).
-Details: `CONVENTIONS.md` § Implementer models and consults.
+Triager and verifier run on sonnet. The triage row carries the implementer model: sonnet by default, opus (spawned with
+`effort: "high"`) for a clearly cross-module ticket. Haiku sub-agents do the mechanical audits (Self-check over the diff, caller
+lookups, scope/size), and opus is consulted at four fixed points: an uncertain gate, writing the plan, after the 2nd failed fix
+attempt, and the review sign-off (opus above 200 changed lines or on plan-approved tickets, sonnet otherwise). Every skill declares
+its `model:` in its frontmatter. Details: `CONVENTIONS.md` § Models and effort.
 
 ## Guardrails — hard rules in code, not only in prompts
 
@@ -79,10 +79,10 @@ and add a backend class to `harness-candidates` and a branch in the forge switch
 
 ## Evals
 
-`tests/run.sh` covers `bin/`; `plugins/harness/evals/` covers how agents behave under the briefs. Five
+`tests/run.sh` covers `bin/`; `plugins/harness/evals/` covers how agents behave under the briefs. Six
 `claude plugin eval` cases: `triager-eligibility` (ELIGIBLE vs. needs-info), `verifier-false-finding`
 (rejects a planted false finding), `implementer-draft-only` (stops at a draft PR, never merges or closes),
-`implementer-plan-consult` (plans a plan-first ticket through the opus plan consult, ships no code), `review-planted-bug`
+`work-spawn-params` (the spawn model and effort per role), `implementer-plan-consult` (plans a plan-first ticket through the opus plan consult, ships no code), `review-planted-bug`
 (flags a planted bug). Each case's scaffold builds a throwaway git repo with a bare `origin` and puts a fake `gh` first on PATH
 that answers from fixture JSON and logs every call, so runs stay offline; graders read that log, the git ref logs and the reply.
 
