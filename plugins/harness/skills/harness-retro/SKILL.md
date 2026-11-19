@@ -48,7 +48,10 @@ the reports in `<repo>/.user/reports/` and the run logs in `<repo>/.user/runs/` 
     summed tokens per model (`haiku`, `sonnet`, `opus`), written `n/Nk` each, plus the count of `stuck-fix` consults. Reports
     without consult lines (older format) are skipped.
 
-No archive/report data in the window → KPIs 8–11 are `n/a`, never `0`. A source with reports but no tagged lines is `n/a` too.
+12. **Rules-review funnel** — from each report's `## Review` line `counts: candidates <n> · confirmed-high <n> · confirmed-low <n> ·
+    dropped <n> · kept <n>`: the summed counts and `kept / candidates` (%). Reports without a `counts:` line are skipped.
+
+No archive/report data in the window → KPIs 8–12 are `n/a`, never `0`. A source with reports but no tagged lines is `n/a` too.
 
 A KPI with no data in the window is `n/a`, never `0`.
 
@@ -60,7 +63,7 @@ A KPI with no data in the window is `n/a`, never `0`.
 3. Append one row, keeping the rest of the document intact:
 
 ```
-| date | window | agent PRs | first-pass | threads/PR | lead time p50/p90 (h) | done/partial/blocked/planned/needs-info | finding precision | findings/fixed rules | findings/fixed test-quality | findings/fixed code-review | findings/fixed intent | red-check exits (0/1/2/3/4/5) | failure classes | consults haiku/sonnet/opus (n/Nk) · stuck-fix | <ratchet…> | post-merge breakage |
+| date | window | agent PRs | first-pass | threads/PR | lead time p50/p90 (h) | done/partial/blocked/planned/needs-info | finding precision | findings/fixed rules | findings/fixed test-quality | findings/fixed code-review | findings/fixed intent | red-check exits (0/1/2/3/4/5) | failure classes | consults haiku/sonnet/opus (n/Nk) · stuck-fix | rules-review kept/candidates | <ratchet…> | post-merge breakage |
 ```
 (omit the breakage column unless `sentry: true`; older rows without the guardrail columns read `n/a` for them — add the columns to the header when missing)
 

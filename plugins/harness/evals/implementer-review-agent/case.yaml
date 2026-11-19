@@ -1,0 +1,43 @@
+schema_version: "1.1"
+name: implementer-review-agent
+description: >
+  The implementer's Review step (briefs/implementer.md, review-criteria.md): one fresh opus rules-review sub-agent that
+  validates each candidate with a sonnet sub-agent (confirmed-high / confirmed-low / dropped), re-validates confirmed-low and
+  hot-path candidates itself and replies with a `counts:` line; /code-review runs in parallel; the sign-off does not
+  re-validate the rules-review findings. Answered from the brief text, no run.
+tags: [implementer, briefs, review]
+runs: 3
+context:
+  scaffold_script: scaffold.sh
+execution:
+  model: sonnet
+  max_turns: 20
+  timeout_seconds: 300
+  allowed_tools: [Bash, Read, Glob, Grep]
+  prompt: |
+    Run `harness-resolve briefs/implementer.md` to find the implementer brief and read its Review step, plus
+    `harness-resolve briefs/review-criteria.md`. Do not run the workflow or call Agent; only answer from the text. Reply with
+    exactly five lines:
+    `rules-review agent: <model>`, `candidate validators: <model>`, `re-validates itself: <what>`,
+    `last line of its reply: <name of the line>`, `sign-off re-validates rules-review findings: <yes|no>`.
+graders:
+  - name: rules-review-opus
+    type: regex
+    pattern: '^rules-review agent:\s*opus\b'
+    flags: mi
+  - name: validators-sonnet
+    type: regex
+    pattern: '^candidate validators:\s*sonnet\b'
+    flags: mi
+  - name: revalidates-low-and-hot-path
+    type: regex
+    pattern: '^re-validates itself:(?=.*confirmed-low)(?=.*hot)'
+    flags: mi
+  - name: counts-line
+    type: regex
+    pattern: '^last line of its reply:\s*`?counts:?`?'
+    flags: mi
+  - name: no-double-validation
+    type: regex
+    pattern: '^sign-off re-validates rules-review findings:\s*no\b'
+    flags: mi

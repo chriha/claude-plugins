@@ -87,12 +87,17 @@ format. A session that already runs on opus answers the opus consults itself, no
   3. **Stuck fix** — after the 2nd failed attempt of the 3-attempt fix budget → a diagnosis from the failing output and the diff.
      The `checks-red` retry respawns the implementer on opus only when this consult already ran (its RESULT carries
      `· consult: stuck-fix` after the class).
-  4. **Sign-off** — replaces the per-finding validators of the review step: gets both reviewers' merged findings and the diff,
-     drops false positives, adds misses, and does one short re-check after the fix commit. Opus when changed lines > 200 (the
+  4. **Sign-off** — gets both reviewers' merged findings and the diff, drops false positives among the `/code-review` findings
+     (the rules-review agent's are already validated), adds misses, and does one short re-check after the fix commit. Opus when changed lines > 200 (the
      review step's count after `exclude_from_size`, same cutoff as the `/code-review` level) or the ticket is plan-approved;
      sonnet otherwise.
-- The report's `## Review` records each consult (role, model, trigger) and its token use next to the review sub-agents' tokens;
-  `harness-retro` counts them.
+- **Rules review** (implementer Review step, not a consult): one fresh read-only **opus** sub-agent applies
+  `briefs/review-criteria.md` including Validation — one sonnet validator per candidate (`confirmed-high | confirmed-low |
+  dropped`), the opus agent itself re-validates `confirmed-low` and hot-path candidates — and replies with the surviving findings
+  plus a `counts:` line. `/code-review` runs in parallel in the same message. The sign-off never re-validates the rules-review
+  findings, so no finding is validated twice.
+- The report's `## Review` records each consult (role, model, trigger) and its token use next to the rules-review agent's `counts:` line and
+  tokens; `harness-retro` counts them.
 
 ## Behaviour is checked by evals
 `tests/run.sh` covers `bin/`; `evals/<case>/case.yaml` (`claude plugin eval`) covers how agents behave under a brief/skill.

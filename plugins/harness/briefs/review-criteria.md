@@ -1,7 +1,7 @@
 # Review criteria (shared)
 
 Single source for rules-compliance and test-quality review. Used by `review` (agents 1, 2, 4, validation) and
-the implementer's Review step. Project specifics: harness.md § Test conventions.
+the implementer's Review step (its opus rules-review agent runs the Validation step itself). Project specifics: harness.md § Test conventions.
 
 ## Rules compliance (CLAUDE.md and `.claude/rules/*`)
 
@@ -35,7 +35,9 @@ Do NOT flag: style or quality concerns, input/state-dependent maybes, subjective
 ## Validation
 
 Each issue is validated by a separate sonnet subagent that gets the author intent and the issue and must confirm with high
-confidence it is real. For rules issues, confirm the rule is scoped for this file and actually violated. Drop the rest.
+confidence it is real. For rules issues, confirm the rule is scoped for this file and actually violated. It replies
+`confirmed-high | confirmed-low | dropped — <why>`. Drop `dropped`; the caller may re-validate `confirmed-low` (and hot-path)
+issues with a stronger model — the implementer's opus rules-review agent does.
 
 ## False positives (do NOT flag)
 
