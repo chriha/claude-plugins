@@ -3,6 +3,8 @@ name: verify
 description: Verify locally, end to end, that the branch's change (or a ticket's acceptance criteria) works, and report evidence per criterion
 argument-hint: "[ticket-id] [--allow-external-apis]"
 disable-model-invocation: true
+model: opus
+effort: high
 allowed-tools: Read, Grep, Glob, Agent, AskUserQuestion, Bash(git branch:*), Bash(git status:*), Bash(git log:*), Bash(git diff:*), Bash(git rev-parse:*), Bash(grep:*), Bash(cat:*), Bash(ls:*), Bash(curl:*), Bash(harness-*:*), Bash(gh issue:*), mcp__codegraph__codegraph_explore, Bash(glab issue:*), mcp__linear
 ---
 

@@ -3,6 +3,7 @@ name: work-on-comments
 description: Fetch the open review comments on this branch's PR, verify each against the code, then fix, push, reply and resolve them autonomously (or step by step with -i), and harvest the lessons into guardrails
 argument-hint: "[-i | --interactive] [--quick-fix] [--dry-run]"
 disable-model-invocation: true
+model: sonnet
 allowed-tools: Read, Grep, Glob, Agent, AskUserQuestion, Bash(harness-*:*), Bash(git branch:*), Bash(git log:*), Bash(git diff:*), Bash(git status:*), Bash(git add:*), Bash(git commit:*), Bash(git rev-parse:*), Bash(git push:*), Bash(git restore:*), Bash(git fetch:*), Bash(git pull --ff-only:*), Bash(git merge-base:*), Bash(git show:*), Bash(jq:*), Bash(gh pr:*), Bash(gh api:*), Bash(gh issue:*), mcp__codegraph__codegraph_explore, Bash(glab issue:*), Bash(glab mr:*), Bash(glab api:*), mcp__linear
 ---
 
@@ -30,7 +31,7 @@ Replies this skill posted start with `<!-- ai-reply -->` (Step 5). Per thread, b
 No open comments and nothing to resolve → say so and stop.
 
 **Verify first.** Give every comment a verdict by reading the code it references (and callers where the claim depends on them): one sonnet sub-agent per
-comment in parallel (opus for design, concurrency, security or data-loss claims), each returning a verdict with file:line evidence:
+comment in parallel (`model: "sonnet"`; `"opus"` for a complex or disputed one: design, concurrency, security or data-loss claims, or a thread with a back-and-forth), each returning a verdict with file:line evidence:
 ✅ **Valid** · ◐ **Partly valid** (say which part) · ❌ **Invalid** (code contradicts the claim) · ❓ **Unverifiable**.
 Invalid/Unverifiable never trigger a code change: → 💬 Clarify with a drafted reply (cite evidence, or what's needed to verify).
 

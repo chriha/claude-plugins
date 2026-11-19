@@ -3,6 +3,7 @@ name: arch-loop
 description: Detect architecture drift — scan domains for rule violations, triage signals into tickets, write acceptance criteria, optionally hand them to /harness:work
 argument-hint: "[domain-slug | path] [--budget N] [--handoff]"
 disable-model-invocation: true
+model: opus
 allowed-tools: Read, Write, Edit, Grep, Glob, Skill, AskUserQuestion, Bash(grep:*), Bash(ls:*), Bash(cat:*), Bash(find:*), Bash(mkdir:*), Bash(rm:*), Bash(harness-*:*), Bash(gh issue:*), Bash(gh label:*), mcp__codegraph__codegraph_explore, Bash(glab issue:*), Bash(glab label:*), mcp__linear
 ---
 

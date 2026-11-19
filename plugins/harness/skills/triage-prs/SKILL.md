@@ -3,6 +3,7 @@ name: triage-prs
 description: Sort open PRs/MRs into AI-reviewable vs human-review-required lanes (labels review:ai / review:human) with a risk note per PR, one sub-agent each
 argument-hint: "[pr# …]"
 disable-model-invocation: true
+model: sonnet
 allowed-tools: Read, Grep, Glob, Agent, Bash(harness-*:*), Bash(jq:*), Bash(git log:*), Bash(git diff:*), Bash(git show:*), Bash(git fetch:*), Bash(git rev-parse:*), Bash(gh pr:*), Bash(gh api:*), Bash(gh label:*), Bash(gh issue:*), Bash(glab mr:*), Bash(glab api:*), Bash(glab label:*), Bash(glab issue:*), mcp__linear, mcp__codegraph__codegraph_explore
 ---
 

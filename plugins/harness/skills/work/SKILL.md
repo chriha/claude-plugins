@@ -3,6 +3,7 @@ name: work
 description: Work my open tickets — a triager gates them, sub-agents fix each in its own worktree and open a draft PR (or plan it, if risky), and verified side findings land in triage
 argument-hint: "[ids | A>B chains | -id | --budget N | --no-verify | --allow-external-apis | --dry-run]"
 disable-model-invocation: true
+model: sonnet
 allowed-tools: Read, Grep, Glob, Agent, SendMessage, AskUserQuestion, Bash(ls:*), Bash(cat:*), Bash(grep:*), Bash(mkdir:*), Bash(rm:*), Bash(jq:*), Bash(harness-*:*), Bash(git status:*), Bash(git diff:*), Bash(git log:*), Bash(git show:*), Bash(git fetch:*), Bash(git rev-parse:*), Bash(git worktree:*), Bash(git branch:*), Bash(git -C:*), Bash(git add:*), Bash(git commit:*), Bash(git push:*), Bash(git merge:*), Bash(git restore:*), Bash(git checkout:*), Bash(gh issue:*), Bash(gh pr:*), Bash(gh label:*), Bash(gh api:*), mcp__codegraph__codegraph_explore, Bash(glab issue:*), Bash(glab mr:*), Bash(glab api:*), Bash(glab label:*)
 ---
 
