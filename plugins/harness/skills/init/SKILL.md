@@ -3,6 +3,7 @@ name: init
 description: Set up the harness in the current repo — detect stack, forge and tracker, write .claude/harness.md, copy the stack pack once, merge permissions, and offer to remove stale per-project copies of the pipeline
 argument-hint: "[--stack laravel|go|none] [--tracker github|gitlab|linear]"
 disable-model-invocation: true
+model: sonnet
 allowed-tools: Read, Write, Edit, Grep, Glob, AskUserQuestion, Bash(ls:*), Bash(cat:*), Bash(cp:*), Bash(mkdir:*), Bash(chmod:*), Bash(diff:*), Bash(jq:*), Bash(git remote:*), Bash(git rev-parse:*), Bash(git status:*), Bash(git check-ignore:*), Bash(harness-*:*)
 ---
 

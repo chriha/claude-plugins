@@ -3,6 +3,7 @@ name: triage
 description: Go through the repo's triage tickets with me one by one — verify each against the code, score it against the acceptance criteria, ask the questions that decide it, then accept, refine via /harness:ticket, send to needs-info, dismiss or mark duplicate
 argument-hint: "[id …] [--label <label>]"
 disable-model-invocation: true
+model: sonnet
 allowed-tools: Read, Grep, Glob, Write, Skill, AskUserQuestion, Bash(ls:*), Bash(cat:*), Bash(grep:*), Bash(find:*), Bash(date:*), Bash(mkdir:*), Bash(rm:*), Bash(harness-*:*), Bash(git log:*), Bash(gh issue:*), Bash(gh pr list:*), Bash(gh api:*), Bash(gh label:*), mcp__linear, mcp__codegraph__codegraph_explore, Bash(glab issue:*), Bash(glab mr:*), Bash(glab api:*), Bash(glab label:*)
 ---
 

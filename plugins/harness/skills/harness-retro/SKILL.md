@@ -3,6 +3,7 @@ name: harness-retro
 description: Measure the agent harness KPIs over a window, append a row to the metrics doc and print the delta
 argument-hint: "[window-days, default 14]"
 disable-model-invocation: true
+model: sonnet
 allowed-tools: Read, Grep, Edit, Write, Bash(git fetch:*), Bash(git show:*), Bash(git log:*), Bash(git grep:*), Bash(gh pr list:*), Bash(gh pr view:*), Bash(gh issue list:*), Bash(gh issue view:*), Bash(gh api:*), Bash(jq:*), Bash(date:*), Bash(harness-*:*), Bash(glab mr:*), Bash(glab api:*), Bash(glab issue:*), mcp__linear
 ---
 

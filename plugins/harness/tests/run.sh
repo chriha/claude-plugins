@@ -595,4 +595,12 @@ printf '{"schemaVersion":2,"startedAt":"2026-01-05T00:00:00.000Z","cases":[]}' >
 rc=0; out=$("$bin/harness-eval-diff" "$er" 2>&1) || rc=$?
 eq "$rc" 1 "eval-diff fails on an unknown result shape ($out)"
 
+# --- skill model frontmatter (#34): every skill declares a model; verify also effort: high
+skills="$(cd "$bin/../skills" && pwd)"
+for f in "$skills"/*/SKILL.md; do
+    m="$(head -12 "$f" | grep -c '^model: \(sonnet\|opus\)$' || true)"
+    eq "$m" 1 "$(basename "$(dirname "$f")") declares model:"
+done
+eq "$(grep -c '^effort: high$' "$skills/verify/SKILL.md")" 1 "verify declares effort: high"
+
 echo "ok"

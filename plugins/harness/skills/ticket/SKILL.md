@@ -2,6 +2,7 @@
 name: ticket
 description: Report a bug, change request or feature and file it as a ready ticket for /harness:work — or pass a ticket id to refine a triage ticket, answer a needs-info ticket's open questions, or finalize and approve a planning ticket's plan
 argument-hint: "[free text | ticket id [--triage-notes <file>]]"
+model: opus
 allowed-tools: Read, Grep, Glob, AskUserQuestion, Bash(ls:*), Bash(cat:*), Bash(grep:*), Bash(find:*), Bash(date:*), Bash(harness-*:*), Bash(gh issue:*), Bash(gh pr list:*), Bash(gh api:*), Bash(gh label:*), mcp__linear, mcp__codegraph__codegraph_explore, Bash(glab issue:*), Bash(glab mr:*), Bash(glab api:*), Bash(glab label:*)
 ---
 
@@ -76,6 +77,11 @@ Finalize the plan of one big ticket with the human, then approve it so `/harness
   first when `.codegraph/` exists. Note drift; it may become a question.
 - **Collision check** (`tickets.md`) on the files the slices list. Hit → ask with the P2 questions: `Add blocked-by <id>` /
   `Relate only` / `Merge into <id>`; apply via `blockers-add` / `Related:` / a description update + `Changed` comment.
+- **Plan grill:** spawn one fresh opus sub-agent (`model: "opus"`, a new agent, not a fork; read-only). Its prompt carries the ticket
+  (description incl. `## Plan`), your P1 findings (`file:line`) and harness.md § Plan-first triggers, and asks it to attack the plan:
+  wrong or missing slices, unstated risks, a cheaper design, ordering or rollout gaps. It replies one line per challenge
+  `- <slice or section> — <problem> — <suggested question or change>`, or `none`. Verify each against the code; keep the real ones
+  as extra P2 questions (with options), drop the rest.
 - Brief (≤ 10 lines): problem in one line, approach, slices as a numbered one-liner list, file count, open question count.
 
 ### P2 — Ask the questions

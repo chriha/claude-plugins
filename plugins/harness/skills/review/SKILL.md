@@ -3,6 +3,7 @@ name: review
 description: Code review the locally checked out branch, a PR, a branch or a path
 argument-hint: "[pr#|branch|path] [--comment] [--fix]"
 disable-model-invocation: true
+model: sonnet
 allowed-tools: Read, Grep, Glob, Agent, AskUserQuestion, Bash(harness-*:*), Bash(git log:*), Bash(git diff:*), Bash(git remote:*), Bash(git branch:*), Bash(git status:*), Bash(git add:*), Bash(git commit:*), Bash(git fetch:*), Bash(git worktree:*), Bash(git push:*), Bash(git rev-parse:*), Bash(git -C:*), Bash(jq:*), Bash(gh pr:*), Bash(gh api:*), Bash(gh issue:*), mcp__codegraph__codegraph_explore, Bash(glab issue:*), Bash(glab mr:*), Bash(glab api:*), mcp__linear
 ---
 
@@ -67,7 +68,10 @@ Steps:
    `scope creep?` only on new-commit lines. On settled code report a correctness bug only — no rules, style, test-quality or intent
    findings. Agent 3 still runs on the whole target: keep its findings on new-commit lines, and on settled code only correctness bugs.
 
-4. For each issue from agents 1, 2, 4, 5 launch parallel sonnet subagents to validate per "Validation" (author intent + issue description).
+4. For each issue from agents 1, 2, 4, 5 launch parallel sonnet subagents to validate per "Validation" (author intent + issue description);
+   each replies `confirmed-high | confirmed-low | dropped`.
+   Then one opus re-validation (`model: "opus"`, fresh agent, read-only) over every `confirmed-low` and every hot-path issue (code handling
+   auth, money or data loss, or a path harness.md § Plan-first triggers names): it keeps an issue only when it still holds.
 5. Drop everything not validated. With agent 3's findings this is the high-signal list.
 6. Act on the flags:
    - `--comment`: each verified finding from 1, 2, 3, 4, 5 as its own comment, **always inline on its diff line** via

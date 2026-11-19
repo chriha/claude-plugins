@@ -2,6 +2,7 @@
 name: doctor
 description: Check this repo's harness setup — missing config, overrides that drifted from the plugin, copied pack rules that differ from upstream, invalid permission entries, stale per-project pipeline copies
 disable-model-invocation: true
+model: sonnet
 allowed-tools: Read, Grep, Glob, AskUserQuestion, Edit, Bash(ls:*), Bash(diff:*), Bash(jq:*), Bash(git log:*), Bash(git status:*), Bash(harness-*:*)
 ---
 
