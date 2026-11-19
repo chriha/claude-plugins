@@ -126,12 +126,15 @@ Verified against `claude -p`; re-probe after a Claude Code upgrade. `/harness:do
 ## Console report
 `briefs/console-report.md` is the one report layout (`VERDICT` / `NEEDS YOU` / `READY FOR REVIEW` / `NO ACTION` / `Also:` / `── details ──`) for
 `work`, `review`, `triage-prs` and `work-on-comments`: every outcome maps to exactly one section, anything needing a human action first.
+`work-on-comments` runs autonomously by default (fix, push once, reply, resolve; no approval stops); `-i` restores the approval stops, `--quick-fix` limits it to quick fixes, `--dry-run` writes nothing.
 
 ## Review markers (PR/MR comments)
 `<!-- ai-review -->` — first line of every inline finding posted by `harness-inline-note` (`harness-retro` counts a discussion as an AI finding
 only when its first note starts with it). `<!-- harness-review -->` + `<!-- harness-review-sha: <full head sha> -->` — end of every comment
 `/harness:review --comment` posts: they identify prior reviews (settled vs new commits) and stop a second review of the same commit.
 `<!-- harness-pr-triage sha=<sha> -->` — the note `/harness:triage-prs` leaves, so a moved head re-triages.
+`<!-- ai-reply -->` — first line of every reply `/harness:work-on-comments` posts (`Fixed in <sha>`, evidence for an Invalid comment): a thread whose last note
+has it is skipped on the next run unless a newer commit exists; a `Fixed in` reply on a still-open thread is only resolved. Not a review note (`review` ignores it).
 
 ## Forge notes
 `gh`/`glab` run against `origin`. PR = MR, PR number = `iid`. Scripts take the forge from `forge:` (`harness-sync`, `harness-worktree`, `harness-check-pr`,

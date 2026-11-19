@@ -1,0 +1,6 @@
+{"data": {"repository": {"pullRequest": {"reviewThreads": {"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": [
+  {"id": "T1", "isResolved": false, "isOutdated": false, "path": "shout.sh", "line": 4, "comments": {"nodes": [
+    {"databaseId": 1001, "author": {"login": "reviewer"}, "createdAt": "2026-11-19T09:00:00Z", "body": "`shift` only drops `--times`, so `bash shout.sh --times 3 hi` prints `3` three times. It needs to drop the count too."}]}},
+  {"id": "T2", "isResolved": false, "isOutdated": false, "path": "shout.sh", "line": 3, "comments": {"nodes": [
+    {"databaseId": 1002, "author": {"login": "reviewer"}, "createdAt": "2026-11-19T09:01:00Z", "body": "`times` is never initialised, so `seq 1 $times` fails when `--times` is not passed."}]}}
+]}}}}}

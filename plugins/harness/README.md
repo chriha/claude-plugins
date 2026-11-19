@@ -37,6 +37,10 @@ Skills and briefs resolve every overridable file through `harness-resolve`, so a
 `init` · `doctor` · `ticket` · `triage` · `work` · `review` · `triage-prs` · `work-on-comments` · `verify` · `harness-retro` · `arch-loop`
 Invoke as `/harness:<name>`.
 
+`work-on-comments [-i] [--quick-fix] [--dry-run]` fixes the open review comments on the branch's PR on its own: verifies each, commits a fix per comment, runs the
+gates, pushes once, replies `Fixed in <sha>` and resolves the fixed threads (replies carry a hidden `<!-- ai-reply -->` marker). Invalid comments get an evidence
+reply and stay open. `-i` asks before every step and pushes or posts nothing unasked; `--quick-fix` skips complex comments; `--dry-run` only prints the plan.
+
 ## Models
 
 Triager and verifier run on sonnet. The triage row carries the implementer model: sonnet by default, opus (spawned with
