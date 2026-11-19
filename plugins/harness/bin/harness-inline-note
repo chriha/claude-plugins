@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# Usage: harness-inline-note <pr> <file> <new_line> <body|->
+# Posts <body> as an inline review comment on <file>:<new_line> (new side of the diff) of PR/MR <pr>; forge from harness.md
+# (`forge: github|gitlab`, default github). <body> "-" reads it from stdin (use a quoted heredoc: no shell expansion of
+# backticks or $). <new_line> 0 posts a general comment (no file; pass any <file>). When the forge rejects the position (the line is
+# not in the diff: GitLab HTTP 400, GitHub 422) it falls back to a general comment that names `file:line`.
+# Every comment starts with `<!-- ai-review -->` so harness-retro can tell AI findings from human ones.
+# Exit: 0 inline (or line 0: general comment), 1 general comment (line not in the diff), 2 usage or API error.
+# Env GH / GLAB override the CLI binaries (tests stub them).
+set -u
+
+marker='<!-- ai-review -->'
+here=$(cd "$(dirname "$0")" && pwd)
+gh=${GH:-gh}
+glab=${GLAB:-glab}
+
+pr=${1:-}
+file=${2:-}
+line=${3:-}
+body=${4:-}
+if [ "$body" = "-" ]; then
+    body=$(cat)
+fi
+raw=$body
+[[ -n $raw && $raw != "$marker"* ]] && body="$marker"$'\n'"$raw"
+if [ -z "$pr" ] || [ -z "$file" ] || [ -z "$body" ] || ! [[ $line =~ ^[0-9]+$ ]]; then
+    echo "harness-inline-note: usage: harness-inline-note <pr> <file> <new_line> <body|->"
+    exit 2
+fi
+command -v jq >/dev/null || { echo "harness-inline-note: jq is required"; exit 2; }
+forge=$("$here/harness-config" key forge)
+forge=${forge:-github}
+
+general() { # <text>
+    case $forge in
+        github) "$gh" pr comment "$pr" --body "$1" >/dev/null ;;
+        gitlab) "$glab" mr note "$pr" -m "$1" >/dev/null 2>&1 || "$glab" mr note create "$pr" -m "$1" >/dev/null ;;
+        *) echo "harness-inline-note: unsupported forge: $forge"; return 1 ;;
+    esac
+}
+fallback() { # a general comment that names the place
+    local text=${raw#"$marker"}
+    text=${text#$'\n'}
+    general "$marker"$'\n'"\`$file:$line\`: $text" || { echo "harness-inline-note: cannot post a comment on $pr"; exit 2; }
+    echo "harness-inline-note: $file:$line not in the diff, posted a general comment"
+    exit 1
+}
+
+if [ "$line" = 0 ]; then
+    general "$body" || { echo "harness-inline-note: cannot post a comment on $pr"; exit 2; }
+    echo "harness-inline-note: posted a general comment"
+    exit 0
+fi
+
+err=$(mktemp "${TMPDIR:-/tmp}/harness-inline-note.XXXXXX")
+trap 'rm -f "$err"' EXIT
+
+case $forge in
+    github)
+        sha=$("$gh" pr view "$pr" --json headRefOid --jq .headRefOid) || { echo "harness-inline-note: cannot read the head of $pr"; exit 2; }
+        if "$gh" api "repos/{owner}/{repo}/pulls/$pr/comments" -f body="$body" -f commit_id="$sha" -f path="$file" \
+            -F line="$line" -f side=RIGHT >/dev/null 2>"$err"; then
+            echo "harness-inline-note: inline on $file:$line"
+            exit 0
+        fi
+        grep -q 'HTTP 422' "$err" || { cat "$err" >&2; echo "harness-inline-note: cannot post on $pr"; exit 2; }
+        fallback ;;
+    gitlab)
+        refs=$("$glab" api "projects/:id/merge_requests/$pr" | jq -ce '.diff_refs') || { echo "harness-inline-note: cannot read diff_refs of !$pr"; exit 2; }
+        if response=$(jq -n --arg body "$body" --arg file "$file" --argjson line "$line" --argjson refs "$refs" \
+            '{body: $body, position: ($refs + {position_type: "text", old_path: $file, new_path: $file, new_line: $line})}' |
+            "$glab" api -X POST "projects/:id/merge_requests/$pr/discussions" -H 'Content-Type: application/json' --input - 2>"$err"); then
+            if [ "$(jq -c '.notes[0].position' <<<"$response")" != null ]; then
+                echo "harness-inline-note: inline on $file:$line"
+                exit 0
+            fi
+            echo "harness-inline-note: GitLab dropped the position, posted as a general thread"
+            exit 1
+        fi
+        grep -q 'HTTP 400' "$err" || { cat "$err" >&2; echo "harness-inline-note: cannot post on !$pr"; exit 2; }
+        fallback ;;
+    *) echo "harness-inline-note: unsupported forge: $forge"; exit 2 ;;
+esac

@@ -1,0 +1,10 @@
+{
+  "name": "project",
+  "version": "0.2.0",
+  "license": "MIT",
+  "icon": "assets/icon.png",
+  "description": "Interactive project setup wizard: interviews you, recommends the best stack when you don't know, and writes a complete, self-contained PROJECT_PLAN.md that a fresh Claude session can execute.",
+  "author": {
+    "name": "Christopher Hartmann"
+  }
+}

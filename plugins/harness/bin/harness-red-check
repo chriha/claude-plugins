@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# Usage: harness-red-check <worktree> <base> [<stub-commit>]
+# Proves the changed tests fail without the non-test diff and pass with it.
+# <stub-commit>: for new APIs, a commit on the branch that adds the identifiers with stubbed behaviour; the red run keeps the
+# non-test code of that commit (so the tests compile) and only drops what came after it.
+# Exit: 0 red then green, 1 never red, 2 not green with the fix, 3 no test changes, 4 setup error, 5 red without a test failure
+#       (compile/setup/syntax error).
+# Config (.claude/harness.md `## Scripts`): test_file_glob (git pathspec, required), red_check_test_cmd (`{files}` = changed
+# test files, `{packages}` = their directories as `./dir/`; neither → packages appended for a `*_test.go` glob, else files).
+# Env RED_CHECK_TEST_CMD overrides the command.
+set -u
+
+here="$(cd "$(dirname "$0")" && pwd)"
+wt=${1:-}
+base=${2:-}
+stub=${3:-}
+if [ -z "$wt" ] || [ -z "$base" ] || ! cd "$wt" 2>/dev/null; then
+    echo "red-check: usage: harness-red-check <worktree> <base> [<stub-commit>]"
+    exit 4
+fi
+
+glob=$("$here/harness-config" key test_file_glob)
+cmdline=${RED_CHECK_TEST_CMD:-$("$here/harness-config" key red_check_test_cmd)}
+if [ -z "$glob" ] || [ -z "$cmdline" ]; then
+    echo "red-check: set test_file_glob and red_check_test_cmd in .claude/harness.md (exit 4)"
+    exit 4
+fi
+
+range="origin/$base...HEAD"
+tests=$(git diff --name-only --diff-filter=ACMR "$range" -- ":(glob)$glob") || { echo "red-check: cannot diff $range"; exit 4; }
+if [ -z "$tests" ]; then
+    echo "red-check: no test changes (exit 3)"
+    exit 3
+fi
+files=$(printf '%s\n' "$tests" | paste -sd' ' -)
+packages=$(printf '%s\n' "$tests" | awk '{ sub(/[^\/]*$/, ""); print "./" $0 }' | sort -u | paste -sd' ' -)
+case "$cmdline" in
+    *'{files}'*|*'{packages}'*) cmdline=${cmdline//\{files\}/$files}; cmdline=${cmdline//\{packages\}/$packages} ;;
+    *) case "$glob" in *_test.go) cmdline="$cmdline $packages" ;; *) cmdline="$cmdline $files" ;; esac ;;
+esac
+
+red_base="origin/$base..."
+if [ -n "$stub" ]; then
+    git merge-base --is-ancestor "$stub" HEAD 2>/dev/null || { echo "red-check: $stub is not a commit on this branch (exit 4)"; exit 4; }
+    red_base="$stub.."
+fi
+
+patch=$(mktemp "${TMPDIR:-/tmp}/harness-red-patch.XXXXXX")
+out=$(mktemp "${TMPDIR:-/tmp}/harness-red-out.XXXXXX")
+status_before=$(git status --porcelain)
+git diff --binary "${red_base}HEAD" -- . ":(exclude,glob)$glob" > "$patch"
+if [ ! -s "$patch" ]; then
+    rm -f "$patch" "$out"
+    echo "red-check: no non-test diff, tests cannot be red (exit 1)"
+    exit 1
+fi
+
+reversed=0
+cleanup() {
+    if [ "$reversed" = 1 ]; then
+        git apply --binary "$patch" && reversed=0
+    fi
+    rm -f "$patch" "$out"
+    if [ "$(git status --porcelain)" != "$status_before" ]; then
+        echo "red-check: WARNING working tree differs from before the run"
+    fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+
+if [ -n "$status_before" ]; then
+    echo "red-check: working tree not clean, commit first (exit 4)"
+    exit 4
+fi
+
+git apply -R --binary "$patch" || { echo "red-check: cannot reverse-apply the non-test diff (exit 4)"; exit 4; }
+reversed=1
+bash -c "$cmdline" 2>&1 | tee "$out"
+red=${PIPESTATUS[0]}
+# A real red is a non-zero exit that is not a build/setup/syntax failure.
+grep -Eq 'build failed|setup failed|SyntaxError|ParseError|Fatal error|Cannot find|ModuleNotFoundError|compilation failed|error TS' "$out"
+build_failed=$?
+
+git apply --binary "$patch" || { echo "red-check: cannot re-apply the non-test diff (exit 4)"; exit 4; }
+reversed=0
+
+if [ "$red" -eq 0 ]; then
+    echo "red-check: tests passed without the fix, they cannot fail (exit 1)"
+    exit 1
+fi
+
+if [ "$build_failed" -eq 0 ]; then
+    echo "red-check: tests did not compile or errored without a failing test, not a valid red (exit 5)"
+    exit 5
+fi
+
+bash -c "$cmdline"
+green=$?
+if [ "$green" -ne 0 ]; then
+    echo "red-check: tests not green with the fix (exit 2)"
+    exit 2
+fi
+
+echo "red-check: red without the fix, green with it (exit 0)"
+exit 0

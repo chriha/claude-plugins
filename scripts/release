@@ -1,0 +1,32 @@
+#!/bin/sh
+# Release one plugin: bump plugins/<plugin>/.claude-plugin/plugin.json version, commit, tag <plugin>-vX.Y.Z, push.
+# Usage: scripts/release <plugin> [patch|minor|major|X.Y.Z]   (default: patch)
+# A plugin without a "version" yet needs an explicit X.Y.Z. Users get it with: /plugin update <plugin>@chriha
+set -eu
+cd "$(dirname "$0")/.."
+plugin=${1:?usage: scripts/release <plugin> [patch|minor|major|X.Y.Z]}
+p="plugins/$plugin/.claude-plugin/plugin.json"
+[ -f "$p" ] || { echo "no such plugin: $plugin" >&2; exit 1; }
+[ "$(git branch --show-current)" = main ] || { echo "release from main" >&2; exit 1; }
+git diff --quiet HEAD || { echo "working tree not clean" >&2; exit 1; }
+git pull -q --ff-only
+v=$(python3 - "$p" "${2:-patch}" <<'PY'
+import json, re, sys
+p, a = sys.argv[1:3]
+m = json.load(open(p))
+if re.fullmatch(r"\d+\.\d+\.\d+", a):
+    v = a
+elif "version" not in m:
+    sys.exit("plugin has no version yet: pass an explicit X.Y.Z")
+else:
+    x, y, z = map(int, m["version"].split("."))
+    v = {"major": f"{x+1}.0.0", "minor": f"{x}.{y+1}.0", "patch": f"{x}.{y}.{z+1}"}[a]
+m["version"] = v
+open(p, "w").write(json.dumps(m, indent=2) + "\n")
+print(v)
+PY
+)
+git commit -q -m "release($plugin): v$v" "$p"
+git tag "$plugin-v$v"
+git push -q origin main "$plugin-v$v"
+echo "Released $plugin v$v"

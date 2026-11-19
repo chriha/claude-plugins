@@ -1,0 +1,638 @@
+#!/usr/bin/env python3
+"""Prints the /work triage facts as JSON.
+
+Usage: harness-candidates "[12>15 20 -37]"   (run inside the repo; needs the tracker/forge CLI authenticated)
+       harness-candidates --self-test
+Backends (harness.md § Tracker): `tracker:` github | gitlab | linear, `forge:` github | gitlab. Missing keys: forge from the
+`origin` host (gitlab in the host name -> gitlab, else github), tracker = forge. Linear ids look like ENG-123 and are read from
+the GraphQL API with LINEAR_API_KEY (scripts cannot call MCP tools); `linear_team:` scopes the "mine" list.
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+import unittest
+import urllib.request
+
+# --- defaults (ponytail: constants, not config; edit here or override the whole script) ---
+PLAN_MARKER = "<!-- work-tickets plan -->"
+SKIP_LABELS = ["on hold", "ready-for-human", "needs-info", "planning"]
+PRIORITY_LABEL = re.compile(r"^priority::?([1-4])$")
+BUG_LABEL, FEATURE_LABEL = "bug", "feature"
+MAX_SLUG_LENGTH = 60
+NUMERIC_ID = re.compile(r"\d+")
+LINEAR_ID = re.compile(r"[A-Za-z][A-Za-z0-9]*-\d+")
+
+
+def fail(msg):
+    print(msg, file=sys.stderr)
+    sys.exit(2)
+
+
+def config(key):
+    here = os.path.dirname(os.path.abspath(__file__))
+    r = subprocess.run([os.path.join(here, "harness-config"), "key", key], capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def ref(id_):
+    """How an id is written: #12 for numbers, ENG-12 as is, a cross-project reference as is."""
+    return f"#{id_}" if NUMERIC_ID.fullmatch(id_) else id_
+
+
+def run(cmd, what):
+    try:
+        return subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        msg = (e.stderr or "").strip() if isinstance(e, subprocess.CalledProcessError) else str(e)
+        fail(f"{what} {' '.join(cmd[1:])} failed: {msg}")
+
+
+def _default_branch():
+    r = subprocess.run(["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], capture_output=True, text=True)
+    return r.stdout.strip().removeprefix("origin/") if r.returncode == 0 and r.stdout.strip() else "main"
+
+
+DEFAULT_BRANCH = _default_branch()
+
+
+def detect_forge():
+    forge = config("forge")
+    if forge:
+        return forge
+    r = subprocess.run(["git", "remote", "get-url", "origin"], capture_output=True, text=True)
+    return "gitlab" if "gitlab" in r.stdout.lower() else "github"
+
+
+# --- forge backends: open PRs/MRs as {url, headRefName, baseRefName} ---
+class GitHubForge:
+    def open_prs(self):
+        return json.loads(run(["gh", "pr", "list", "--state", "open", "--limit", "200",
+                               "--json", "url,headRefName,baseRefName"], "gh"))
+
+
+class GitLabForge:
+    def open_prs(self):
+        mrs = json.loads(run(["glab", "mr", "list", "--output", "json", "--per-page", "100"], "glab") or "[]")
+        return [{"url": m["web_url"], "headRefName": m["source_branch"], "baseRefName": m["target_branch"]} for m in mrs]
+
+
+# --- tracker backends: me(), my_open_ids(), ticket(id, me, open_prs) ---
+def _attach_open_pr(t, id_, open_prs):
+    branch = re.compile(r"^[^/]+/" + re.escape(id_.lower()) + "-")
+    for pr in open_prs:
+        if branch.match(pr["headRefName"]):
+            t.open_pr = PR(pr["url"], pr["headRefName"], pr["baseRefName"])
+            return
+
+
+def _label_priority(t, name):
+    t.labels.append(name.lower())
+    m = PRIORITY_LABEL.match(name.lower())
+    if m:
+        t.priority = int(m.group(1))
+
+
+def implementer_model():
+    """harness.md § Models `implementer_model`: `opus` opts in to a whole-session opus implementer; anything else is sonnet."""
+    config = os.path.join(os.path.dirname(os.path.realpath(__file__)), "harness-config")
+    r = subprocess.run([config, "key", "implementer_model"], capture_output=True, text=True)
+    if r.returncode != 0:
+        fail(f"harness-config key implementer_model failed: {r.stderr.strip()}")
+    return "opus" if r.stdout.strip().lower() == "opus" else "sonnet"
+
+
+class GitHub:
+    def _gh(self, *args):
+        return run(["gh", *args], "gh")
+
+    def me(self):
+        return self._gh("api", "user", "--jq", ".login").strip()
+
+    def my_open_ids(self):
+        out = json.loads(self._gh("issue", "list", "--assignee", "@me", "--state", "open", "--limit", "100",
+                                  "--json", "number"))
+        return [str(i["number"]) for i in out]
+
+    def ticket(self, id_, me, open_prs):
+        issue = json.loads(self._gh("issue", "view", id_, "--json",
+                                    "number,title,body,createdAt,state,labels,assignees,comments"))
+        t = Ticket(id=id_, title=issue["title"], created_at=issue["createdAt"],
+                   has_plan="## Plan" in (issue.get("body") or ""))
+        for label in issue["labels"]:
+            _label_priority(t, label["name"])
+        t.assigned_to_me = any(a["login"] == me for a in issue["assignees"])
+        if any((c.get("body") or "").strip().startswith(PLAN_MARKER) for c in issue["comments"]):
+            t.has_plan = True
+
+        # A failing call must not read as "no blockers" (_gh exits on failure).
+        pages = json.loads(self._gh("api", "--paginate", "--slurp",
+                                    f"repos/{{owner}}/{{repo}}/issues/{id_}/dependencies/blocked_by"))
+        for page in pages:
+            for b in page:
+                t.blockers.append(Blocker(str(b["number"]), b["state"].lower(), b["state"].lower() == "closed"))
+        _attach_open_pr(t, id_, open_prs)
+        return t
+
+
+class GitLab:
+    def _api(self, path):
+        return json.loads(run(["glab", "api", path], "glab") or "null")
+
+    def me(self):
+        return self._api("user")["username"]
+
+    def my_open_ids(self):
+        me = self.me()
+        out = self._api(f"projects/:id/issues?assignee_username={me}&state=opened&per_page=100")
+        return [str(i["iid"]) for i in out]
+
+    def ticket(self, id_, me, open_prs):
+        issue = self._api(f"projects/:id/issues/{id_}")
+        t = Ticket(id=id_, title=issue["title"], created_at=issue["created_at"],
+                   has_plan="## Plan" in (issue.get("description") or ""))
+        for name in issue["labels"]:
+            _label_priority(t, name)
+        t.assigned_to_me = any(a["username"] == me for a in issue.get("assignees") or [])
+        notes = self._api(f"projects/:id/issues/{id_}/notes?sort=asc&per_page=100") or []
+        if any((n.get("body") or "").strip().startswith(PLAN_MARKER) for n in notes):
+            t.has_plan = True
+        for link in self._api(f"projects/:id/issues/{id_}/links") or []:  # a failing call exits (run)
+            if link.get("link_type") != "is_blocked_by":
+                continue
+            closed = link["state"] == "closed"
+            if link.get("project_id") == issue["project_id"]:
+                t.blockers.append(Blocker(str(link["iid"]), link["state"], closed))
+            else:  # another project: counts as a blocker, cannot be worked from here
+                full = (link.get("references") or {}).get("full") or f"project {link.get('project_id')} #{link['iid']}"
+                t.blockers.append(Blocker(full, link["state"], closed, external=True))
+        _attach_open_pr(t, id_, open_prs)
+        return t
+
+
+class Linear:
+    URL = "https://api.linear.app/graphql"
+    DONE = ("completed", "canceled")
+
+    def __init__(self):
+        self.key = os.environ.get("LINEAR_API_KEY")
+        if not self.key:
+            fail("LINEAR_API_KEY is not set (harness-candidates reads Linear's GraphQL API; MCP tools are not available to scripts)")
+        self.team = config("linear_team")
+
+    def _q(self, query, variables=None):
+        req = urllib.request.Request(self.URL, data=json.dumps({"query": query, "variables": variables or {}}).encode(),
+                                     headers={"Authorization": self.key, "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                body = json.load(r)
+        except Exception as e:  # noqa: BLE001 - any transport/HTTP failure must stop, never read as "empty"
+            fail(f"linear request failed: {e}")
+        if body.get("errors"):
+            fail(f"linear request failed: {body['errors'][0].get('message')}")
+        return body["data"]
+
+    def me(self):
+        return self._q("{ viewer { id } }")["viewer"]["id"]
+
+    def my_open_ids(self):
+        flt = {"state": {"type": {"in": ["backlog", "unstarted", "started"]}}}
+        if self.team:
+            flt["team"] = {"key": {"eq": self.team}}
+        data = self._q("query($f: IssueFilter) { viewer { assignedIssues(first: 100, filter: $f) { nodes { identifier } } } }",
+                       {"f": flt})
+        return [n["identifier"].upper() for n in data["viewer"]["assignedIssues"]["nodes"]]
+
+    def ticket(self, id_, me, open_prs):
+        q = """query($id: String!) { issue(id: $id) { identifier title description createdAt priority
+            assignee { id } labels { nodes { name } } comments(first: 100) { nodes { body } }
+            inverseRelations(first: 100) { nodes { type issue { identifier state { type name } } } } } }"""
+        issue = self._q(q, {"id": id_})["issue"]
+        if issue is None:
+            fail(f"linear: {id_} not found")
+        t = Ticket(id=id_, title=issue["title"], created_at=issue["createdAt"], priority=issue.get("priority") or 0,
+                   has_plan="## Plan" in (issue.get("description") or ""))
+        t.labels = [n["name"].lower() for n in issue["labels"]["nodes"]]
+        t.assigned_to_me = (issue.get("assignee") or {}).get("id") == me
+        if any((c.get("body") or "").strip().startswith(PLAN_MARKER) for c in issue["comments"]["nodes"]):
+            t.has_plan = True
+        for rel in issue["inverseRelations"]["nodes"]:
+            if rel["type"] != "blocks":
+                continue
+            st = rel["issue"]["state"]
+            t.blockers.append(Blocker(rel["issue"]["identifier"].upper(), st["name"].lower(), st["type"] in self.DONE))
+        _attach_open_pr(t, id_, open_prs)
+        return t
+
+
+def backends():
+    forge_name = detect_forge()
+    tracker_name = config("tracker") or forge_name
+    forges = {"github": GitHubForge, "gitlab": GitLabForge}
+    trackers = {"github": GitHub, "gitlab": GitLab, "linear": Linear}
+    if forge_name not in forges:
+        fail(f"unsupported forge: {forge_name} (github | gitlab)")
+    if tracker_name not in trackers:
+        fail(f"unsupported tracker: {tracker_name} (github | gitlab | linear)")
+    return trackers[tracker_name](), forges[forge_name](), tracker_name
+
+
+# --- pure triage logic ---
+class Blocker:
+    def __init__(self, id, status, resolved=False, external=False):
+        self.id, self.status, self.resolved, self.external = id, status, resolved, external
+
+    def out(self):
+        return {"id": self.id, "status": self.status, "resolved": self.resolved}
+
+
+class PR:
+    def __init__(self, url, source, target):
+        self.url, self.source, self.target = url, source, target
+
+
+class Ticket:
+    def __init__(self, id, title="", labels=None, priority=0, created_at="", assigned_to_me=False,
+                 has_plan=False, blockers=None, open_pr=None):
+        self.id, self.title, self.labels, self.priority = id, title, labels or [], priority
+        self.created_at, self.assigned_to_me, self.has_plan = created_at, assigned_to_me, has_plan
+        self.blockers, self.open_pr = blockers or [], open_pr
+
+
+def parse_id(s, linear=False):
+    """Numeric ticket number (`#12` or `12`) or, for Linear, `ENG-12` (any case); returns the normalised string."""
+    if linear:
+        if not LINEAR_ID.fullmatch(s):
+            raise ValueError(f"not a Linear issue id: {s!r}")
+        return s.upper()
+    s = s[1:] if s.startswith("#") else s
+    if not NUMERIC_ID.fullmatch(s) or int(s) < 1:
+        raise ValueError(f"not an issue number: {s!r}")
+    return str(int(s))
+
+
+def parse_argument(argument, linear=False):
+    """`12>15 20 -37` -> chains [["12", "15"], ["20"]], excluded ["37"]."""
+    chains, excluded = [], []
+    for token in argument.split():
+        if token.startswith("-"):
+            id_ = parse_id(token[1:], linear)
+            if id_ not in excluded:
+                excluded.append(id_)
+            continue
+        chains.append([parse_id(p, linear) for p in token.split(">")])
+    return chains, excluded
+
+
+def branch_name(id_, title, labels):
+    """`<type>/<n>-<slug>`, everything after `<type>/` at most 60 chars."""
+    kind = "chore"
+    if BUG_LABEL in labels:
+        kind = "fix"
+    elif FEATURE_LABEL in labels:
+        kind = "feature"
+    elif title.lower().startswith("refactor"):
+        kind = "refactor"
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-") or "ticket"
+    name = f"{id_.lower()}-{slug}"
+    if len(name) > MAX_SLUG_LENGTH:
+        name = name[:MAX_SLUG_LENGTH].rstrip("-")
+    return f"{kind}/{name}"
+
+
+def plan_approved(t):
+    return t.has_plan and "planning" not in t.labels
+
+
+def priority_rank(p):
+    return 5 if p == 0 else p
+
+
+def new_row(t):
+    return {"id": t.id, "title": t.title, "priority": t.priority, "createdAt": t.created_at,
+            "labels": list(t.labels), "planApproved": plan_approved(t), "blockers": [],
+            "class": "", "continues": None}
+
+
+def classify(t, earlier_in_chain):
+    for label in SKIP_LABELS:
+        if label in t.labels:
+            return "skipped", label, None
+    blocking = [Blocker(b.id, b.status) for b in t.blockers if not b.resolved and b.id not in earlier_in_chain]
+    if blocking:
+        described = ", ".join(f"{ref(b.id)} ({b.status})" for b in blocking)
+        return "blocked", "blocked by " + described, blocking
+    return "eligible", "", None
+
+
+def unresolved(t, tickets):
+    ids = [b.id for b in t.blockers if not b.resolved and not b.external]
+    return sorted(ids, key=lambda i: tickets[i].created_at)  # stable: older first
+
+
+def build_chain(root_id, tickets, excluded):
+    """Blockers first (older first among independent ones), the ticket last, an open-PR blocker as the single head."""
+    order, heads, errs, done = [], [], [], set()
+
+    def visit(id_, stack):
+        if id_ in stack:
+            errs.append(f"cycle through {ref(id_)}")
+            return
+        if id_ in done:
+            return
+        done.add(id_)
+        t = tickets.get(id_)
+        if t is None:
+            errs.append(f"{ref(id_)} unknown")
+            return
+        if id_ != root_id:
+            if id_ in excluded:
+                errs.append(f"{ref(id_)} excluded")
+                return
+            if not t.assigned_to_me:
+                errs.append(f"{ref(id_)} assigned to someone else")
+                return
+            for label in SKIP_LABELS:
+                if label in t.labels:
+                    errs.append(f"{ref(id_)} {label}")
+                    return
+            if t.open_pr is not None:
+                heads.append(id_)
+                return
+        external = [b for b in t.blockers if b.external and not b.resolved]
+        if external:
+            errs.append(f"{ref(id_)} blocked by {external[0].id} (another project)")
+            return
+        for b in unresolved(t, tickets):
+            visit(b, stack + [id_])
+        order.append(id_)
+
+    visit(root_id, [])
+    if len(heads) > 1:
+        errs.append("multiple open-PR blockers: " + ", ".join(ref(h) for h in heads))
+    return heads + order, errs
+
+
+def join_chain(chain):
+    return ">".join(ref(i) for i in chain)
+
+
+def suggest_fix(id_, tickets, excluded):
+    """Propose a chain that works the blockers of id_ first -> (fix, fix_reason, partial)."""
+    chain, errs = build_chain(id_, tickets, excluded)
+    if not errs:
+        return join_chain(chain), "", ""
+    workable, heads = [], 0
+    for b in unresolved(tickets[id_], tickets):
+        attempt, attempt_errs = build_chain(b, tickets, excluded)
+        if attempt_errs:
+            continue
+        attempt_heads = sum(1 for c in attempt if tickets[c].open_pr is not None)
+        if heads + attempt_heads > 1:
+            continue
+        heads += attempt_heads
+        workable += [c for c in attempt if c not in workable]
+    return None, "; ".join(errs), join_chain(workable) if workable else ""
+
+
+def make_plan(tickets, chains, excluded, argument_mode, model="sonnet"):
+    """Classify the tickets of the given chains. Every id in chains and every blocker must be in tickets."""
+    skipped, skipped_order, kept, seen = {}, [], [], set()
+    for chain in chains:
+        cut = ""
+        for id_ in chain:
+            if not cut and id_ in excluded:
+                cut = id_
+                skipped[id_] = "excluded by argument"
+                skipped_order.append(id_)
+            elif cut:
+                skipped[id_] = f"excluded by argument (follows {ref(cut)} in chain)"
+                skipped_order.append(id_)
+        remaining = []
+        for id_ in chain:
+            if id_ in skipped:
+                break
+            if id_ not in seen:
+                seen.add(id_)
+                remaining.append(id_)
+        if remaining:
+            kept.append(remaining)
+
+    rows, row_order, chains_out = {}, [], []
+
+    def put(r):
+        rows[r["id"]] = r
+        row_order.append(r["id"])
+
+    for chain in kept:
+        previous_branch, stopped_at = "", ""
+        for position, id_ in enumerate(chain):
+            t = tickets[id_]
+            r = new_row(t)
+            if stopped_at:
+                r["class"], r["reason"] = "blocked", f"not eligible: chain stopped at {ref(stopped_at)}"
+                put(r)
+                continue
+            cls, reason, blockers = classify(t, chain[:position])
+            if position == 0 and len(chain) > 1 and t.open_pr is not None:
+                r["class"], r["branch"] = "head", t.open_pr.source
+                put(r)
+                previous_branch = t.open_pr.source
+                continue
+            if cls != "eligible":
+                stopped_at = id_
+                r["class"], r["reason"] = cls, reason
+                if position > 0:
+                    r["class"], r["reason"] = "blocked", "not eligible: " + reason
+                if blockers:
+                    r["blockers"] = [b.out() for b in blockers]
+                put(r)
+                continue
+            branch, base = branch_name(id_, t.title, t.labels), DEFAULT_BRANCH
+            if t.open_pr is not None:
+                branch, base = t.open_pr.source, t.open_pr.target
+                r["continues"] = t.open_pr.url
+            elif previous_branch:
+                base = previous_branch
+            r.update({"class": "eligible", "branch": branch, "base": base, "model": model})
+            put(r)
+            previous_branch = branch
+        if len(chain) > 1:
+            chains_out.append(chain)
+
+    if argument_mode:
+        for id_ in row_order:
+            r = rows[id_]
+            if r["class"] == "blocked" and r["blockers"]:
+                fix, fix_reason, partial = suggest_fix(id_, tickets, excluded)
+                if fix is not None:
+                    r["fix"] = fix
+                if fix_reason:
+                    r["fixReason"] = fix_reason
+                if partial:
+                    r["partial"] = partial
+
+    def pick(cls):
+        return [rows[i] for i in row_order if rows[i]["class"] == cls]
+
+    eligible = sorted(pick("eligible"), key=lambda r: (priority_rank(r["priority"]), r["createdAt"]))
+    skipped_out = [{"id": r["id"], "reason": r["reason"]} for r in pick("skipped")]
+    skipped_out += [{"id": i, "reason": skipped[i]} for i in skipped_order]
+    return {"eligible": eligible, "chains": chains_out, "heads": pick("head"),
+            "blocked": pick("blocked"), "skipped": skipped_out}
+
+
+def main(argv):
+    argument = argv[1] if len(argv) > 1 else ""
+    tracker, forge, tracker_name = backends()
+    try:
+        chains, excluded = parse_argument(argument, tracker_name == "linear")
+    except ValueError as e:
+        fail(str(e))
+    argument_mode = bool(chains)
+
+    me, open_prs = tracker.me(), forge.open_prs()
+    if not argument_mode:
+        chains = [[i] for i in tracker.my_open_ids()]
+
+    tickets, queue = {}, [i for c in chains for i in c]
+    while queue:
+        id_ = queue.pop(0)
+        if id_ in tickets:
+            continue
+        tickets[id_] = tracker.ticket(id_, me, open_prs)
+        queue += [b.id for b in tickets[id_].blockers if not b.external]
+
+    print(json.dumps(make_plan(tickets, chains, excluded, argument_mode, implementer_model()), indent=2))
+
+
+# --- self-test (port of plan_test.go) ---
+def T(id_, *args, **kw):
+    return Ticket(str(id_), *args, **kw)
+
+
+def B(id_, *args, **kw):
+    return Blocker(str(id_), *args, **kw)
+
+
+class PlanTest(unittest.TestCase):
+    def test_parse_argument(self):
+        self.assertEqual(parse_argument("#12>15 20 -37 -37"), ([["12", "15"], ["20"]], ["37"]))
+
+    def test_parse_argument_rejects_non_numbers(self):
+        with self.assertRaises(ValueError):
+            parse_argument("ENG-12")
+
+    def test_parse_argument_linear(self):
+        self.assertEqual(parse_argument("eng-12>ENG-15 -eng-3", True), ([["ENG-12", "ENG-15"]], ["ENG-3"]))
+        with self.assertRaises(ValueError):
+            parse_argument("#12", True)
+
+    def test_branch_name(self):
+        for title, labels, want in [
+            ("Keep null placings out", ["bug"], "fix/12-keep-null-placings-out"),
+            ("Add a --json flag", ["feature"], "feature/12-add-a-json-flag"),
+            ("Refactor the cache", [], "refactor/12-refactor-the-cache"),
+            ("???", [], "chore/12-ticket"),
+        ]:
+            self.assertEqual(branch_name("12", title, labels), want)
+
+    def test_branch_name_linear_is_lowercase(self):
+        self.assertEqual(branch_name("ENG-12", "Null total", ["bug"]), "fix/eng-12-null-total")
+
+    def test_branch_name_cuts_slug_at_sixty(self):
+        name = branch_name("12", "word " * 30, []).removeprefix("chore/")
+        self.assertLessEqual(len(name), MAX_SLUG_LENGTH)
+        self.assertFalse(name.endswith("-"))
+
+    def test_scoped_priority_label(self):
+        t = T(1)
+        _label_priority(t, "priority::2")
+        self.assertEqual((t.priority, t.labels), (2, ["priority::2"]))
+
+    def test_open_pr_matches_linear_branch(self):
+        t = T("ENG-7")
+        _attach_open_pr(t, "ENG-7", [{"url": "u", "headRefName": "fix/eng-7-x", "baseRefName": "main"},
+                                     {"url": "v", "headRefName": "fix/eng-70-x", "baseRefName": "main"}])
+        self.assertEqual(t.open_pr.url, "u")
+
+    def test_eligible_ordered_by_priority_then_age(self):
+        tickets = {
+            "1": T(1, "old, no priority", created_at="2026-01-01", assigned_to_me=True),
+            "2": T(2, "newer, urgent", created_at="2026-02-01", priority=1, assigned_to_me=True),
+            "3": T(3, "newest, urgent", created_at="2026-03-01", priority=1, assigned_to_me=True),
+        }
+        plan = make_plan(tickets, [["1"], ["2"], ["3"]], [], False)
+        self.assertEqual([r["id"] for r in plan["eligible"]], ["2", "3", "1"])
+
+    def test_skip_labels_and_open_blockers(self):
+        tickets = {
+            "1": T(1, labels=["needs-info"]),
+            "2": T(2, blockers=[B(3, "open")]),
+            "3": T(3),
+            "4": T(4, blockers=[B(3, "closed", True)]),
+        }
+        plan = make_plan(tickets, [["1"], ["2"], ["4"]], [], False)
+        self.assertEqual([s["reason"] for s in plan["skipped"]], ["needs-info"])
+        self.assertEqual([(r["id"], r["reason"]) for r in plan["blocked"]], [("2", "blocked by #3 (open)")])
+        self.assertEqual([r["id"] for r in plan["eligible"]], ["4"])
+
+    def test_external_blocker_blocks_but_is_not_chained(self):
+        tickets = {"1": T(1, assigned_to_me=True, blockers=[Blocker("grp/other#9", "opened", external=True)])}
+        plan = make_plan(tickets, [["1"]], [], True)
+        self.assertEqual(plan["blocked"][0]["reason"], "blocked by grp/other#9 (opened)")
+        self.assertNotIn("fix", plan["blocked"][0])
+
+    def test_linear_ids_in_reasons_and_chains(self):
+        tickets = {"ENG-1": T("ENG-1", assigned_to_me=True),
+                   "ENG-2": T("ENG-2", assigned_to_me=True, blockers=[B("ENG-1", "todo")])}
+        plan = make_plan(tickets, [["ENG-2"]], [], True)
+        self.assertEqual(plan["blocked"][0]["reason"], "blocked by ENG-1 (todo)")
+        self.assertEqual(plan["blocked"][0].get("fix"), "ENG-1>ENG-2")
+
+    def test_chain_stacks_on_previous_branch(self):
+        tickets = {"1": T(1, "first"), "2": T(2, "second", blockers=[B(1, "open")])}
+        plan = make_plan(tickets, [["1", "2"]], [], True)
+        by_id = {r["id"]: r for r in plan["eligible"]}
+        self.assertEqual(len(by_id), 2)
+        self.assertEqual(by_id["1"]["base"], DEFAULT_BRANCH)
+        self.assertEqual(by_id["2"]["base"], by_id["1"]["branch"])
+        self.assertEqual(plan["chains"], [["1", "2"]])
+
+    def test_open_pr_heads_a_chain_and_is_not_worked(self):
+        tickets = {"1": T(1, open_pr=PR("u", "fix/1-a", "main")), "2": T(2, blockers=[B(1, "open")])}
+        plan = make_plan(tickets, [["1", "2"]], [], True)
+        self.assertEqual([r["id"] for r in plan["heads"]], ["1"])
+        self.assertEqual([r["base"] for r in plan["eligible"]], ["fix/1-a"])
+
+    def test_model_is_the_project_setting_not_plan_approval(self):
+        tickets = {"1": T(1, has_plan=True), "2": T(2)}
+        self.assertEqual([r["model"] for r in make_plan(tickets, [["1"], ["2"]], [], False)["eligible"]], ["sonnet", "sonnet"])
+        self.assertEqual([r["model"] for r in make_plan(tickets, [["1"], ["2"]], [], False, "opus")["eligible"]], ["opus", "opus"])
+
+    def test_excluding_a_ticket_drops_rest_of_chain(self):
+        tickets = {str(i): T(i) for i in (1, 2, 3)}
+        plan = make_plan(tickets, [["1", "2", "3"]], ["2"], True)
+        self.assertEqual([r["id"] for r in plan["eligible"]], ["1"])
+        self.assertEqual(len(plan["skipped"]), 2)
+
+    def test_blocked_argument_ticket_gets_fix_chain(self):
+        tickets = {"1": T(1, assigned_to_me=True),
+                   "2": T(2, assigned_to_me=True, blockers=[B(1, "open")])}
+        plan = make_plan(tickets, [["2"]], [], True)
+        self.assertEqual(plan["blocked"][0].get("fix"), "#1>#2")
+
+    def test_fix_refused_when_blocker_on_hold(self):
+        tickets = {"1": T(1, labels=["on hold"], assigned_to_me=True),
+                   "2": T(2, assigned_to_me=True, blockers=[B(1, "open")])}
+        plan = make_plan(tickets, [["2"]], [], True)
+        blocked = plan["blocked"][0]
+        self.assertNotIn("fix", blocked)
+        self.assertIn("#1 on hold", blocked["fixReason"])
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
+        unittest.main(argv=[sys.argv[0]], verbosity=1)
+    main(sys.argv)

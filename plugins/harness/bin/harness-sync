@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+#
+# Step 0 of /work: fetch/prune, clean merged or deleted worktrees, unstack PRs whose base merged,
+# refresh the _main reference worktree. Safe to run standalone and repeatedly. Run from inside the repo.
+# Output: `issue-nnn merged|closed|deleted` (cleaned), `pruned <n>` (archived reports/run logs older than 90 days removed), `UNSTACKED: <url>`, `UNSTACK_CONFLICT: <url> [(reason)]`.
+#
+set -euo pipefail
+
+here="$(cd "$(dirname "$0")" && pwd)"
+repo="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
+cd "$repo"
+forge="$("$here/harness-config" key forge)"; forge="${forge:-github}"
+main="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##' || true)"; main="${main:-main}"
+
+mkdir -p .user/worktrees .user/reports
+git fetch -q origin --prune
+
+"$here/harness-worktree" clean
+
+# Prune archived reports and run logs older than 90 days
+pruned=0
+for d in .user/reports/archive .user/runs; do
+    [ -d "$d" ] || continue
+    n="$(find "$d" -type f -mtime +90 -print -delete | wc -l)"
+    pruned=$((pruned + n))
+done
+[ "$pruned" -eq 0 ] || echo "pruned $pruned"
+
+case "$forge" in
+    github | gitlab) ;;
+    *)
+        echo "UNSUPPORTED forge: $forge (unstacking skipped)"
+        "$here/harness-worktree" add _main >/dev/null
+        exit 0 ;;
+esac
+
+# Source branch -> worktree path
+worktree_of() {
+    git worktree list --porcelain | awk -v b="refs/heads/$1" '/^worktree /{p=$2} $0=="branch " b{print p}'
+}
+
+# forge adapters: my open PRs/MRs not based on the default branch as `<number> <source> <target> <url>`; state of a base branch's PR/MR
+# (MERGED|CLOSED|OPEN|none); retarget a PR/MR
+stacked_prs() {
+    if [ "$forge" = github ]; then
+        gh pr list --author @me --state open --json number,headRefName,baseRefName,url 2>/dev/null |
+            jq -r --arg m "$main" '.[] | select(.baseRefName != $m) | "\(.number) \(.headRefName) \(.baseRefName) \(.url)"'
+    else
+        glab mr list --author=@me --output json --per-page 100 2>/dev/null |
+            jq -r --arg m "$main" '.[] | select(.target_branch != $m) | "\(.iid) \(.source_branch) \(.target_branch) \(.web_url)"'
+    fi
+}
+base_state_of() {
+    if [ "$forge" = github ]; then
+        gh pr list --head "$1" --state all --json state 2>/dev/null | jq -r '.[0].state // "none"'
+    else
+        glab mr list --source-branch "$1" --all --output json 2>/dev/null | jq -r '(.[0].state // "none") | if . == "opened" then "OPEN" else ascii_upcase end'
+    fi
+}
+retarget() {
+    if [ "$forge" = github ]; then gh pr edit "$1" --base "$main" >/dev/null; else glab mr update "$1" --target-branch "$main" >/dev/null; fi
+}
+
+stacked_prs | { while read -r number source target url; do
+    base_state="$(base_state_of "$target")"
+    case "$base_state" in
+        MERGED)
+            wt="$(worktree_of "$source")"
+            if [ -z "$wt" ]; then
+                echo "UNSTACK_CONFLICT: $url (no worktree)"
+            elif git -C "$wt" merge "origin/$main" --no-edit >/dev/null 2>&1; then
+                git -C "$wt" push -q && retarget "$number" && echo "UNSTACKED: $url"
+            else
+                git -C "$wt" merge --abort
+                echo "UNSTACK_CONFLICT: $url"
+            fi
+            ;;
+        CLOSED) echo "UNSTACK_CONFLICT: $url (base closed)" ;;
+    esac
+done; } || true
+
+"$here/harness-worktree" add _main >/dev/null
