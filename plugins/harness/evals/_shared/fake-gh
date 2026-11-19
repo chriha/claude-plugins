@@ -8,7 +8,8 @@ set -euo pipefail
 dir="${HARNESS_EVAL_DIR:?fake gh: HARNESS_EVAL_DIR not set}"
 fx="$dir/fixtures"
 mkdir -p "$dir/bodies" "$dir/state/issues"
-printf '%s\n' "$*" >> "$dir/gh.log"
+allargs="$*"
+printf '%s\n' "$allargs" >> "$dir/gh.log"
 
 pos=() jqexpr="" fields="" body="" bodyfile="" search="" assignee="" head="" slurp="" add="" remove=""
 while [ $# -gt 0 ]; do
@@ -28,8 +29,9 @@ while [ $# -gt 0 ]; do
         --add-label) add="$add,$1"; shift ;;
         --remove-label) remove="$remove,$1"; shift ;;
         --paginate|--draft|--web|-w|--comments|-c) ;;
+        -f|--field|--raw-field) case "$1" in body=*) body="${1#body=}" ;; esac; shift ;;
         --state|-s|--limit|-L|--label|-l|--add-assignee|--remove-assignee|--title|-t|--description|-d \
-            |--base|-B|-X|--method|-f|--field|--raw-field|-R|--repo|--color|--reason|--template) shift ;;
+            |--base|-B|-X|--method|-R|--repo|--color|--reason|--template) shift ;;
         *) pos+=("$a") ;;
     esac
 done
@@ -59,6 +61,10 @@ case "${pos[0]:-} ${pos[1]:-}" in
     "api "*)
         ep="${pos[1]:-}"
         if [ "$ep" = user ]; then out='{"login":"eval-bot"}'
+        elif [ "$ep" = graphql ]; then # review threads from fixtures/threads.json; a resolve mutation only shows in gh.log
+            case "$allargs" in *resolveReviewThread*) out='{"data":{"resolveReviewThread":{"thread":{"id":"ok"}}}}' ;; *) out="$(or_empty "$fx/threads.json")" ;; esac
+        elif [[ "$ep" =~ pulls/([0-9]+)/comments/[0-9]+/replies$ ]]; then save_body "$dir/bodies/replies.md.new"
+            { cat "$dir/bodies/replies.md.new"; printf '\n'; } >> "$dir/bodies/replies.md"; rm -f "$dir/bodies/replies.md.new"; out='{"id":1}'
         elif [[ "$ep" =~ issues/([0-9]+)/dependencies/blocked_by$ ]]; then
             out="$(or_empty "$fx/blocked_by/${BASH_REMATCH[1]}.json")"
             [ -n "$slurp" ] && out="[$out]"
@@ -91,6 +97,7 @@ case "${pos[0]:-} ${pos[1]:-}" in
     "pr view") n="$(num "${pos[2]:-}")"; [ -f "$fx/prs/$n.json" ] || die "no pull request #$n"; out="$(cat "$fx/prs/$n.json")" ;;
     "pr create") save_body "$dir/bodies/pr.md"; echo "$url/pull/901"; exit 0 ;;
     "pr merge"|"pr ready"|"pr edit"|"pr comment"|"pr close") exit 0 ;;
+    "pr diff") exit 0 ;;
     "repo view") out='{"name":"fixture","owner":{"login":"eval"},"nameWithOwner":"eval/fixture","defaultBranchRef":{"name":"main"},"url":"'"$url"'"}' ;;
     *) die "unsupported command: ${pos[*]:-}" ;;
 esac

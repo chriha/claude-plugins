@@ -1,7 +1,7 @@
 # Console report layout (every skill that ends with a report)
 
 The final console report of a skill answers "what needs me, and why" at the top. `work`, `review`, `triage-prs` and
-`work-on-comments` print this layout; only the `── details ──` block is the skill's own. It is the console output, not the
+`work-on-comments` print this layout (`work-on-comments` also in its autonomous default run: replies posted, threads resolved and fixes pushed go under `DONE`; unfixed comments, failed gates and failed pushes under `NEEDS YOU`); only the `── details ──` block is the skill's own. It is the console output, not the
 `.user/reports` file.
 
 **Status words (shared):** `done | partial | blocked | failed | skipped | needs-info | planned | aborted`. A skill may add its own

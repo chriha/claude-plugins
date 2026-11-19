@@ -410,6 +410,17 @@ for sk in "$bin"/../skills/*/SKILL.md; do
     case $(sed -n 's/^allowed-tools: //p' "$sk") in *'gh '*) grep -q 'Bash(glab ' "$sk" || fail "$sk grants gh but no glab" ;; esac
 done
 
+# --- work-on-comments autonomous by default (#33): modes, marker, tools and eval case stay in step
+woc="$bin/../skills/work-on-comments/SKILL.md"
+grep -q '^argument-hint: .*--interactive.*--quick-fix.*--dry-run' "$woc" || fail "work-on-comments has no argument-hint with its modes"
+for t in 'git push' 'git restore' 'git fetch' 'git pull --ff-only' 'git merge-base' 'git show'; do
+    sed -n 's/^allowed-tools: //p' "$woc" | grep -q "Bash($t:" || fail "work-on-comments allowed-tools lacks $t"
+done
+grep -q 'ai-reply' "$woc" && grep -q 'ai-reply' "$bin/../CONVENTIONS.md" || fail "the ai-reply marker is not in both the skill and CONVENTIONS.md"
+grep -q 'never force' "$woc" || fail "work-on-comments does not say it never force-pushes"
+[ -f "$bin/../evals/work-on-comments-autonomous/case.yaml" ] || fail "eval case work-on-comments-autonomous missing"
+! grep -rn -i 'never pushes\|needs approval' "$woc" "$bin/../README.md" "$bin/../briefs/console-report.md" || fail "stale approval claim for work-on-comments"
+
 # --- missing-label path (#55): the implementer creates planning/needs-info before adding them; init ensures the pipeline labels
 grep -q 'create-label planning.*add-label planning' "$bin/../briefs/implementer.md" || fail "implementer does not create the planning label before adding it"
 grep -q 'create-label needs-info' "$bin/../briefs/implementer.md" || fail "implementer does not create the needs-info label"
