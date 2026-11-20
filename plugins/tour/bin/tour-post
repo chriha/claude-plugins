@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+#
+# Post ONE inline comment on an MR/PR. Only the tour server calls this, and only after an explicit click in the UI.
+# Usage: tour-post <data-dir> --path <file> [--old-path <file>] [--old-line N] [--new-line N] [--body-file <file|->]
+#   <data-dir>  holds tour.json; its `mr` (platform, project, iid, url, head_sha) says where to post
+#   --path      the file's path at the head (new name); --old-path its path at the base (differs only for a rename; default --path)
+#   --new-line  a line that exists at the head: an added or an unchanged line
+#   --old-line  a line that exists at the base: a removed or an unchanged line (an unchanged line gets both)
+#   --body-file the comment text; `-` (default) reads stdin
+# Prints {"id": <note id>, "url": <note url>, "inline": true} on stdout and exits 0. `inline` is false when GitLab accepted the
+# note but dropped its position (it then sits in the MR as a general thread).
+# Exit 1: the forge refused (its CLI's output goes to stderr verbatim) or the MR moved on (GitLab: head != the tour's head).
+# Exit 2: usage. Needs jq and gh (GitHub) or glab (GitLab). Env GH / GLAB override the CLI binaries.
+#
+set -euo pipefail
+
+die() { echo "tour-post: $*" >&2; exit 2; }
+command -v jq >/dev/null || die "jq is required"
+gh=${GH:-gh} glab=${GLAB:-glab}
+
+dir="" path="" old_path="" old_line="" new_line="" body_file=-
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --path|--old-path|--old-line|--new-line|--body-file)
+            [ $# -ge 2 ] || die "$1 needs a value"
+            case "$1" in --path) path=$2 ;; --old-path) old_path=$2 ;; --old-line) old_line=$2 ;; --new-line) new_line=$2 ;; --body-file) body_file=$2 ;; esac
+            shift 2 ;;
+        -?*) die "unknown option $1" ;;
+        *) [ -z "$dir" ] || die "usage: tour-post <data-dir> --path <file> [--old-path <file>] [--old-line N] [--new-line N] [--body-file <file|->]"; dir=$1; shift ;;
+    esac
+done
+[ -n "$dir" ] && [ -n "$path" ] || die "usage: tour-post <data-dir> --path <file> [--old-path <file>] [--old-line N] [--new-line N] [--body-file <file|->]"
+[ -f "$dir/tour.json" ] || die "no tour.json in $dir"
+old_path=${old_path:-$path}
+[ -n "$old_line$new_line" ] || die "pass --new-line and/or --old-line"
+for n in "$old_line" "$new_line"; do case "$n" in ""|0) ;; *[!0-9]*|0*) die "line numbers are positive integers: $n" ;; esac; done
+case "$path$old_path" in *$'\n'*) die "bad path" ;; esac
+if [ "$body_file" = - ]; then body=$(cat); else [ -f "$body_file" ] || die "no such file: $body_file"; body=$(cat "$body_file"); fi
+[ -n "${body//[[:space:]]/}" ] || die "the comment is empty"
+
+mr=$(jq -ce '.mr | select(type == "object")' "$dir/tour.json") || die "tour.json has no mr"
+field() { jq -r --arg k "$1" '.[$k] // empty' <<<"$mr"; }
+platform=$(field platform) project=$(field project) iid=$(field iid) head=$(field head_sha) url=$(field url)
+[ -n "$platform" ] && [ -n "$project" ] && [ -n "$iid" ] && [ -n "$head" ] && [ -n "$url" ] || die "tour.json mr is incomplete"
+case "$iid" in *[!0-9]*) die "bad iid in tour.json" ;; esac
+case "$project" in *..*|*[!A-Za-z0-9._/-]*) die "unsupported project path: $project" ;; esac
+host=${url#*://}; host=${host%%/*}
+
+err=$(mktemp "${TMPDIR:-/tmp}/tour-post.XXXXXX"); trap 'rm -f "$err"' EXIT
+refuse() { cat "$err" >&2; exit 1; } # the CLI's own words, verbatim
+
+case "$platform" in
+    github)
+        if [ -n "$new_line" ]; then line=$new_line side=RIGHT; else line=$old_line side=LEFT; fi
+        resp=$(GH_HOST="$host" "$gh" api -X POST "repos/$project/pulls/$iid/comments" -f body="$body" -f commit_id="$head" \
+            -f path="$path" -F line="$line" -f side="$side" 2>"$err") || { [ -n "$resp" ] && printf '%s\n' "$resp" >> "$err"; refuse; }
+        jq -ce '{id: .id, url: .html_url, inline: true}' <<<"$resp" || { echo "tour-post: unexpected GitHub response: $resp" >&2; exit 1; } ;;
+    gitlab)
+        enc=${project//\//%2F}
+        refs=$(GITLAB_HOST="$host" "$glab" api "projects/$enc/merge_requests/$iid" 2>"$err" | jq -ce '.diff_refs | select(type == "object")') ||
+            { cat "$err" >&2; echo "tour-post: cannot read the merge request's diff_refs" >&2; exit 1; }
+        live=$(jq -r .head_sha <<<"$refs")
+        [ "$live" = "$head" ] || { echo "tour-post: the MR head moved since the tour (tour $head, MR $live); regenerate the tour so the line numbers match" >&2; exit 1; }
+        payload=$(jq -n --arg body "$body" --arg op "$old_path" --arg np "$path" --arg ol "$old_line" --arg nl "$new_line" --argjson refs "$refs" \
+            '{body: $body, position: ({base_sha: $refs.base_sha, start_sha: $refs.start_sha, head_sha: $refs.head_sha,
+                position_type: "text", old_path: $op, new_path: $np}
+                + (if $ol != "" then {old_line: ($ol | tonumber)} else {} end)
+                + (if $nl != "" then {new_line: ($nl | tonumber)} else {} end))}')
+        resp=$(printf '%s' "$payload" | GITLAB_HOST="$host" "$glab" api -X POST "projects/$enc/merge_requests/$iid/discussions" \
+            -H 'Content-Type: application/json' --input - 2>"$err") || { [ -n "$resp" ] && printf '%s\n' "$resp" >> "$err"; refuse; }
+        jq -ce --arg url "$url" '.notes[0] | {id: .id, url: ($url + "#note_" + (.id | tostring)), inline: (.position != null)}' <<<"$resp" ||
+            { echo "tour-post: unexpected GitLab response: $resp" >&2; exit 1; } ;;
+    *) die "unsupported platform: $platform" ;;
+esac

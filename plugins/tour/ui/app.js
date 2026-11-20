@@ -1,4 +1,4 @@
-// tour UI: vanilla JS, no build step, read-only. Contract: references/tour-schema.md. Tour data is only ever set via
+// tour UI: vanilla JS, no build step. Nothing is posted without a click on "Post". Contract: references/tour-schema.md. Tour data is only ever set via
 // textContent (never innerHTML); the one innerHTML is highlight.js output, which escapes its input.
 const CTX = 3; // real file lines shown around each atom
 const CDN = {
@@ -27,6 +27,53 @@ const files = new Map();
 const save = () => { clearTimeout(saveTimer); saveTimer = setTimeout(flush, 300); };
 const flush = () => fetch('/api/state', { method: 'PUT', body: JSON.stringify(S), keepalive: true }).catch(() => {});
 addEventListener('pagehide', flush);
+
+// --- comment drafts (state.json: drafts{id: {id, atom, kind add|del|ctx, old_line, new_line, body, posted?}}); posting is a server call per click
+const draftId = (a, r) => `${a.id}:${r.k}:${r.k === 'add' ? '' : r.o}:${r.k === 'del' ? '' : r.n}`;
+const draftOf = (a, r) => S.drafts[draftId(a, r)];
+let drawerOpen = false, focusDraft = null;
+function startDraft(a, r) {
+  const id = draftId(a, r);
+  S.drafts[id] ??= { id, atom: a.id, file: a.file, kind: r.k, old_line: r.k === 'add' ? null : r.o, new_line: r.k === 'del' ? null : r.n, body: '' };
+  drawerOpen = true; focusDraft = id; save(); drawer(); route(true);
+}
+const draftList = () => Object.values(S.drafts);
+const unposted = () => draftList().filter((d) => !d.posted && d.body.trim());
+async function postDraft(d) {
+  d.error = null; drawer();
+  await fetch('/api/state', { method: 'PUT', body: JSON.stringify(S) }).catch(() => {}); // the server posts what it has saved
+  try {
+    const r = await fetch('/api/comment', { method: 'POST', body: JSON.stringify({ id: d.id }) });
+    const j = await r.json();
+    if (r.ok) S.drafts[d.id] = j.draft; else d.error = j.error ?? `HTTP ${r.status}`;
+  } catch (e) { d.error = String(e.message ?? e); }
+  drawer(); route(true);
+}
+function drawer() {
+  document.getElementById('drawer')?.remove();
+  if (!drawerOpen) return;
+  const items = draftList();
+  const el = h('aside', { id: 'drawer', class: 'drawer' },
+    h('div', { class: 'file' }, h('b', {}, `Comment drafts (${items.length})`), ' ', h('button', { onclick: () => { drawerOpen = false; drawer(); } }, 'close'),
+      ' ', Object.assign(h('button', { onclick: async () => { for (const d of unposted()) await postDraft(d); } }, `Post all (${unposted().length})`), { disabled: unposted().length === 0 })),
+    items.length === 0 && h('p', { class: 'muted' }, 'Click a line number (or press c) to draft a comment on that line.'),
+    items.map((d) => {
+      const ta = h('textarea', { rows: 3, id: 'draft-' + d.id, placeholder: 'Comment' }); ta.value = d.body; if (d.posted) ta.readOnly = true;
+      ta.addEventListener('input', () => { d.body = ta.value; save(); });
+      if (focusDraft === d.id) setTimeout(() => ta.focus());
+      return h('div', { class: 'draft' },
+        h('div', { class: 'muted' }, `${d.file} · ${d.kind === 'del' ? 'removed line ' + d.old_line : 'line ' + d.new_line}`),
+        ta,
+        d.posted
+          ? h('div', { class: 'ok' }, 'posted · note ', /^https?:\/\//.test(d.posted.url ?? '') ? h('a', { href: d.posted.url, target: '_blank', rel: 'noopener noreferrer' }, String(d.posted.id)) : String(d.posted.id),
+              d.posted.inline === false && h('span', { class: 'warn' }, ' (the forge dropped the position: it is a general note)'))
+          : h('div', {}, h('button', { onclick: () => postDraft(d) }, 'Post'), ' ',
+              h('button', { onclick: () => { delete S.drafts[d.id]; save(); drawer(); route(true); } }, 'discard')),
+        d.error && h('pre', { class: 'bad err' }, d.error));
+    }));
+  focusDraft = null;
+  document.body.append(el);
+}
 
 const chapters = () => [...tour.chapters, ...(tour.mechanical?.atoms?.length
   ? [{ id: 'mechanical', title: 'Mechanical', order_reason: tour.mechanical.note, blocks: [{ atoms: tour.mechanical.atoms, what: tour.mechanical.note, why: '', why_source: 'code', impact: [], watch: [] }] }] : [])];
@@ -71,15 +118,16 @@ function atomView(a) {
     h('span', { class: 'muted' }, ` ${a.id} · -${a.old.start},${a.old.count} +${a.new.start},${a.new.count}${a.kind ? ' · ' + a.kind : ''}`)));
   fileLines(a.file).then((lines) => {
     const { before, dels, adds, after } = atomRows(a, lines);
-    const num = (v) => h('span', { class: 'n' }, v ?? '');
+    const num = (v, r) => (v == null || !r || !r.k ? h('span', { class: 'n' }, v ?? '')
+      : h('span', { class: 'n cm' + (draftOf(a, r) ? ' drafted' : ''), title: 'comment on this line', onclick: () => startDraft(a, r) }, v));
     if (S.mode === 'split') {
       const pairs = []; for (let i = 0; i < Math.max(dels.length, adds.length); i++) pairs.push([dels[i], adds[i]]);
       const cell = (r) => h('span', { class: 'cell ' + (r?.k ?? '') }, r ? code(r.t, a.file) : '');
-      for (const r of before) box.append(h('div', { class: 'row split ctx' }, num(r.o), cell(r), num(r.n), cell(r)));
-      for (const [d, p] of pairs) box.append(h('div', { class: 'row split' }, num(d?.o), cell(d), num(p?.n), cell(p)));
-      for (const r of after) box.append(h('div', { class: 'row split ctx' }, num(r.o), cell(r), num(r.n), cell(r)));
+      for (const r of before) box.append(h('div', { class: 'row split ctx' }, num(r.o, r), cell(r), num(r.n, r), cell(r)));
+      for (const [d, p] of pairs) box.append(h('div', { class: 'row split' }, num(d?.o, d), cell(d), num(p?.n, p), cell(p)));
+      for (const r of after) box.append(h('div', { class: 'row split ctx' }, num(r.o, r), cell(r), num(r.n, r), cell(r)));
     } else {
-      for (const r of [...before, ...dels, ...adds, ...after]) box.append(h('div', { class: 'row ' + r.k }, num(r.k === 'add' ? r.n : r.o), h('span', { class: 'cell' }, (r.k === 'add' ? '+' : r.k === 'del' ? '-' : ' '), code(r.t, a.file))));
+      for (const r of [...before, ...dels, ...adds, ...after]) box.append(h('div', { class: 'row ' + r.k }, num(r.k === 'add' ? r.n : r.o, r), h('span', { class: 'cell' }, (r.k === 'add' ? '+' : r.k === 'del' ? '-' : ' '), code(r.t, a.file))));
     }
     if (!dels.length && !adds.length) box.append(h('div', { class: 'row ctx' }, num(), h('span', {}, `(${a.kind ?? 'no line changes'})`)));
   });
@@ -90,6 +138,7 @@ function atomView(a) {
 function bar() {
   show($bar, 
     h('a', { href: '#/', class: 'grow' }, 'Tour · ', tour.mr.title),
+    h('button', { 'aria-pressed': drawerOpen, onclick: () => { drawerOpen = !drawerOpen; drawer(); } }, `comments (${draftList().length})`),
     h('button', { 'aria-pressed': S.mode === 'split', title: 'unified / side by side', onclick: () => { S.mode = S.mode === 'split' ? 'unified' : 'split'; save(); route(true); } }, 'side by side'),
     h('button', { title: 'toggle theme', onclick: () => { S.theme = document.documentElement.dataset.theme === 'dark' || (!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches) ? 'light' : 'dark'; theme(); save(); } }, 'theme'));
 }
@@ -160,12 +209,21 @@ function route(keepScroll) {
   if (keepScroll !== true) scrollTo(0, 0);
 }
 
+// key c: draft on the first changed line of the current block (click a line number for any other line)
+async function draftOnBlock() {
+  const a = atoms[curCh.blocks[cur]?.atoms[0]];
+  if (!a?.old || !a?.new) return;
+  const { dels, adds } = atomRows(a, await fileLines(a.file).catch(() => null));
+  const r = adds[0] ?? dels[0];
+  if (r) startDraft(a, r);
+}
 addEventListener('keydown', (e) => {
   if (e.ctrlKey || e.metaKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || !curCh) return;
   const all = chapters(), idx = all.indexOf(curCh);
   if (e.key === 'j') { cur = Math.min(cur + 1, curCh.blocks.length - 1); paint(true); }
   else if (e.key === 'k') { cur = Math.max(cur - 1, 0); paint(true); }
   else if (e.key === 'u') mark();
+  else if (e.key === 'c') draftOnBlock();
   else if (e.key === 'n' && all[idx + 1]) location.hash = '#/c/' + all[idx + 1].id;
   else if (e.key === 'p' && all[idx - 1]) location.hash = '#/c/' + all[idx - 1].id;
 });
@@ -175,7 +233,7 @@ try {
   let raw;
   [tour, raw, S] = await Promise.all([getJSON('/api/tour'), getJSON('/api/atoms'), getJSON('/api/state')]);
   atoms = Object.fromEntries((Array.isArray(raw) ? raw : raw.atoms ?? []).map((a) => [a.id, a]));
-  S = { understood: {}, mode: 'unified', ...S }; theme(); route();
+  S = { understood: {}, mode: 'unified', ...S, drafts: S.drafts ?? {} }; theme(); route();
   loadScript(CDN.hljs).then(() => route(true)).catch(() => {}); // highlight when it arrives; the tour reads fine without it
 } catch (e) {
   show($main, h('p', { class: 'bad' }, 'Could not load the tour: ' + e.message));
