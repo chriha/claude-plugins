@@ -313,7 +313,7 @@ cp "$fx/tour.full.json" "$data/tour.json"; cp "$fx/atoms.json" "$data/atoms.json
 printf 'line1\nline2\n' > "$data/worktree/app/a.txt"; echo SECRET > "$tmp/outside/secret.txt"
 ln -s "$tmp/outside/secret.txt" "$data/worktree/app/link.txt"
 "$bin/tour-serve" "$data" --no-open > "$tmp/serve.out" 2> "$tmp/serve.err" &
-srv=$!; trap 'kill $srv 2>/dev/null; rm -rf "$tmp"' EXIT
+srv=$!; trap 'kill $srv 2>/dev/null || true; rm -rf "$tmp"' EXIT
 for _ in $(seq 50); do grep -q '^http' "$tmp/serve.out" && break; sleep 0.1; done
 url="$(head -1 "$tmp/serve.out")"
 case "$url" in http://127.0.0.1:[0-9]*/\?token=[0-9a-f]*) ;; *) fail "serve url [$url] $(cat "$tmp/serve.err")" ;; esac
@@ -438,7 +438,7 @@ cat > "$cdata/atoms.json" <<'JSON'
 ]}
 JSON
 "$bin/tour-serve" "$cdata" --no-open > "$tmp/serve2.out" 2> "$tmp/serve2.err" &
-srv2=$!; trap 'kill $srv2 2>/dev/null; rm -rf "$tmp"' EXIT
+srv2=$!; trap 'kill $srv2 2>/dev/null || true; rm -rf "$tmp"' EXIT
 for _ in $(seq 50); do grep -q '^http' "$tmp/serve2.out" && break; sleep 0.1; done
 url2="$(head -1 "$tmp/serve2.out")"; base2="${url2%%/\?*}"; tok2="${url2##*token=}"; H2=(-H "X-Tour-Token: $tok2")
 drafts='{"drafts": {
@@ -510,7 +510,7 @@ chmod +x "$tmp/stubs/claude-stub"
 chdata="$tmp/chdata"; mkdir -p "$chdata/worktree"; cp "$fx/tour.full.json" "$chdata/tour.json"; cp "$fx/atoms.json" "$chdata/atoms.json"
 ch="$(jq -r '.chapters[0].id' "$chdata/tour.json")"
 env -u ANTHROPIC_API_KEY TOUR_CLAUDE_BIN="$tmp/stubs/claude-stub" "$bin/tour-serve" "$chdata" --no-open > "$tmp/serve3.out" 2> "$tmp/serve3.err" &
-srv3=$!; trap 'kill $srv3 2>/dev/null; rm -rf "$tmp"' EXIT
+srv3=$!; trap 'kill $srv3 2>/dev/null || true; rm -rf "$tmp"' EXIT
 for _ in $(seq 50); do grep -q '^http' "$tmp/serve3.out" && break; sleep 0.1; done
 url3="$(head -1 "$tmp/serve3.out")"; base3="${url3%%/\?*}"; H3=(-H "X-Tour-Token: ${url3##*token=}")
 chat() { code "${H3[@]}" -X POST -d "$(jq -nc --arg c "$1" --arg m "$2" '{chapter: $c, message: $m}')" "$base3/api/chat"; }
@@ -558,5 +558,11 @@ eq "$(chat "$ch" ' ')" 400 "empty message"
 eq "$(code -X POST -d '{}' "$base3/api/chat")" 403 "chat needs the token"
 cases=$((cases + 21))
 kill "$srv3" 2>/dev/null || true
+
+# --- #56 UI renders atoms without hunks (rename, binary, mode, add) instead of throwing (needs node >= 18)
+ui_out="$(node "$bin/../tests/ui-atoms.mjs" "$bin/../ui/app.js" 2>&1)" || fail "app.js throws on no-hunk atoms: $ui_out"
+case "$ui_out" in *"Could not load the tour"*) fail "no-hunk atoms: tour not loaded: $ui_out" ;; esac
+for k in rename binary mode add; do case "$ui_out" in *"· $k"*) ;; *) fail "no-hunk atom kind [$k] not shown: $ui_out" ;; esac; done
+cases=$((cases + 1))
 
 echo "tour: $cases cases ok"
