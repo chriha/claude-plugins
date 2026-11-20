@@ -1,6 +1,6 @@
 # claude-plugins
 
-Marketplace `chriha` with two Claude Code plugins: `harness` (ticket → plan → implement → review pipeline) and `project` (`/project:setup`, `/project:update`, `/project:build`). User docs: `README.md` and `plugins/<name>/README.md`. The harness contract between skills, briefs and project config is `plugins/harness/CONVENTIONS.md`.
+Marketplace `chriha` with three Claude Code plugins: `harness` (ticket → plan → implement → review pipeline) and `project` (`/project:setup`, `/project:update`, `/project:build`) and `tour` (guided MR/PR review, `/tour:review`; in development). User docs: `README.md` and `plugins/<name>/README.md`. The harness contract between skills, briefs and project config is `plugins/harness/CONVENTIONS.md`.
 
 ## Commands
 - Test (harness): `bash plugins/harness/tests/run.sh` (needs git, go)
@@ -14,6 +14,7 @@ Marketplace `chriha` with two Claude Code plugins: `harness` (ticket → plan �
 - `.claude-plugin/marketplace.json`: the marketplace (`chriha`); add new plugins here
 - `plugins/harness/`: `skills/` (`/harness:*`), `briefs/`, `adapters/`, `packs/`, `templates/`, `bin/` (tested by `tests/run.sh`), `evals/`, `hooks/`, `agents/`
 - `plugins/project/`: `skills/{setup,update,build}`, `agents/plan-writer.md` (Opus), `references/` (interview guide, recommendations, plan template and checklist; edit there to tune the wizard)
+- `plugins/tour/`: `skills/{review,clean}`, `references/`, `bin/`, `server/`, `ui/`, `tests/run.sh` (scaffold only; stands alone, no dependency on harness)
 
 ## Conventions
 - Edit the source here, never the installed copy under `~/.claude*/plugins/cache/`.
