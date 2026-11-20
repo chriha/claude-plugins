@@ -1,6 +1,6 @@
 {
   "name": "tour",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "MIT",
   "description": "Guided MR/PR review: /tour:review groups a change into chapters, explains each, and opens a local web UI so the reviewer builds understanding. In development.",
   "author": {
