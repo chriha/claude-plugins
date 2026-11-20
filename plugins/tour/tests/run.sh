@@ -510,7 +510,7 @@ chmod +x "$tmp/stubs/claude-stub"
 chdata="$tmp/chdata"; mkdir -p "$chdata/worktree"; cp "$fx/tour.full.json" "$chdata/tour.json"; cp "$fx/atoms.json" "$chdata/atoms.json"
 ch="$(jq -r '.chapters[0].id' "$chdata/tour.json")"
 env -u ANTHROPIC_API_KEY TOUR_CLAUDE_BIN="$tmp/stubs/claude-stub" "$bin/tour-serve" "$chdata" --no-open > "$tmp/serve3.out" 2> "$tmp/serve3.err" &
-srv3=$!; trap 'kill $srv3 2>/dev/null; rm -rf "$tmp"' EXIT
+srv3=$!; trap 'kill $srv3 2>/dev/null || true; rm -rf "$tmp"' EXIT
 for _ in $(seq 50); do grep -q '^http' "$tmp/serve3.out" && break; sleep 0.1; done
 url3="$(head -1 "$tmp/serve3.out")"; base3="${url3%%/\?*}"; H3=(-H "X-Tour-Token: ${url3##*token=}")
 chat() { code "${H3[@]}" -X POST -d "$(jq -nc --arg c "$1" --arg m "$2" '{chapter: $c, message: $m}')" "$base3/api/chat"; }
