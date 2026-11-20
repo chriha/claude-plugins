@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# tour-serve <data-dir> [--port N] [--worktree <dir>] [--no-open]
+# Starts the read-only tour UI for a cached tour and prints its URL (127.0.0.1, random free port, per-run token).
+# <data-dir> = ${CLAUDE_PLUGIN_DATA:-~/.claude/tour}/<host>/<project>/<iid>/<head-sha>/ (tour.json, atoms.json, worktree/).
+# Runs in the foreground until stopped; the caller backgrounds it. Opens the browser unless --no-open. Needs node >= 18.
+set -euo pipefail
+die() { echo "tour-serve: $*" >&2; exit 1; }
+here="$(cd "$(dirname "$0")/.." && pwd)"
+
+dir="" open=--open pass=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --no-open) open=""; shift ;;
+        --port|--worktree) [ $# -ge 2 ] || die "$1 needs a value"; pass+=("$1" "$2"); shift 2 ;;
+        -*) die "unknown option $1" ;;
+        *) [ -z "$dir" ] || die "usage: tour-serve <data-dir> [--port N] [--worktree <dir>] [--no-open]"; dir="$1"; shift ;;
+    esac
+done
+[ -n "$dir" ] || die "usage: tour-serve <data-dir> [--port N] [--worktree <dir>] [--no-open]"
+[ -f "$dir/tour.json" ] || die "no tour.json in $dir"
+command -v node >/dev/null || die "node >= 18 is required"
+[ "$(node -p 'process.versions.node.split(".")[0]')" -ge 18 ] || die "node >= 18 is required"
+exec node "$here/server/server.mjs" "$dir" ${pass[@]+"${pass[@]}"} ${open:+"$open"}
