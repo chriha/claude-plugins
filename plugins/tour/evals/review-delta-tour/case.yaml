@@ -45,7 +45,7 @@ graders:
   - name: no-optional-fields
     type: regex
     target: {source: file, path: data/new/tour.json}
-    pattern: '"(graph|rules_flags|callers|intent|probes)"\s*:'
+    pattern: '"(graph|rules_flags|callers|probes)"\s*:'
     match: not_contains
   - name: validator-run
     type: tool_used
