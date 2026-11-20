@@ -124,7 +124,7 @@ git -c core.quotepath=false diff -U0 -M --no-color --no-ext-diff --no-textconv -
     --src-prefix=a/ --dst-prefix=b/ "$base_sha" "$head_sha" > "$dir/diff.patch"
 
 jq -Rn '
-  # git C-quotes a path holding ", \ or a control character: "a/quo\"te", \t \n \\ \" and 3-digit octal bytes
+  # git C-quotes a path holding ", \ or a control character: "a/quo\"te", \t \n \\ \" and 3-digit octal bytes (octal is read as a code point: enough for control characters; invalid UTF-8 names are unsupported)
   def unq: if startswith("\"") and endswith("\"") and length >= 2 then
         .[1:-1] | gsub("\\\\(?<c>[0-7]{3}|.)"; .c as $c
             | if ($c | length) == 3 then [($c | explode | map(. - 48)) as $d | $d[0] * 64 + $d[1] * 8 + $d[2]] | implode
