@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+#
+# Deterministic drift flags for a fetched MR/PR. Always on, costs no tokens.
+# Usage:  tour-drift <data-dir>     (the dir tour-fetch printed: needs atoms.json and meta.json; needs git, jq)
+# Prints the `drift` array of the tour schema: [{"kind": …, "detail": …, "atoms": ["a1", …]}], `[]` when nothing drifts.
+# Kinds:
+#   new_dependency     a package name that is in a manifest/lockfile at the head and not at the base
+#                      (package.json, package-lock.json, composer.json, composer.lock, go.mod, go.sum,
+#                       requirements*.txt, Gemfile, Cargo.toml); a version bump of a known name is not new
+#   new_migration      an added file under migration(s)/, migrate/ or alembic/versions/
+#   changed_config     a changed route, config or env file; detail "<file>: +added -removed ~changed" keys
+#   new_top_level_dir  a top-level directory that has files in the head and no entry at the base
+#
+set -euo pipefail
+
+die() { echo "tour-drift: $*" >&2; exit 1; }
+command -v jq >/dev/null || die "jq is required"
+dir="${1:?usage: tour-drift <data-dir>}"
+[ -f "$dir/atoms.json" ] && [ -f "$dir/meta.json" ] || die "$dir needs atoms.json and meta.json (run tour-fetch first)"
+wt="$(jq -r '.worktree' "$dir/meta.json")"; base="$(jq -r '.base_sha' "$dir/meta.json")"; head="$(jq -r '.head_sha' "$dir/meta.json")"
+[ -d "$wt" ] || die "worktree $wt is gone; re-run tour-fetch"
+
+flags="$(mktemp)"; trap 'rm -f "$flags"' EXIT
+flag() { # <kind> <detail> <file or dir prefix: atoms are those whose file matches> <prefix|exact>
+    jq -cn --arg kind "$1" --arg detail "$2" --arg m "$3" --arg mode "$4" --slurpfile a "$dir/atoms.json" \
+        '{kind: $kind, detail: $detail, atoms: [$a[0][] | select(if $mode == "prefix" then (.file | startswith($m)) else (.file == $m or .old_file == $m) end) | .id]}' >> "$flags"
+}
+show() { git -C "$wt" show "$1:$2" 2>/dev/null || true; } # empty when the file is absent at that commit
+
+# names <file> → "name version" lines for the manifest/lockfile on stdin
+names() {
+    case "${1##*/}" in
+        package.json) jq -r '[.dependencies, .devDependencies, .peerDependencies, .optionalDependencies | objects | to_entries[] | "\(.key) \(.value)"] | .[]' 2>/dev/null ;;
+        composer.json) jq -r '[.require, ."require-dev" | objects | to_entries[] | select(.key != "php" and (.key | startswith("ext-") | not)) | "\(.key) \(.value)"] | .[]' 2>/dev/null ;;
+        package-lock.json) jq -r '(.packages // {}) | to_entries[] | select(.key != "") | "\(.key | sub("^.*node_modules/"; "")) \(.value.version // "")"' 2>/dev/null ;;
+        composer.lock) jq -r '[.packages, ."packages-dev" | arrays | .[] | "\(.name) \(.version)"] | .[]' 2>/dev/null ;;
+        go.mod) awk '/^require[ \t]*\(/ {b=1; next} b && /^\)/ {b=0; next}
+                     b && NF >= 2 && $1 !~ /^\/\// {print $1, $2}
+                     /^require[ \t]+[^(]/ {print $2, $3}' ;;
+        go.sum) awk 'NF >= 2 {sub(/\/go\.mod$/, "", $2); print $1, $2}' ;;
+        requirements*.txt) sed -e 's/[[:space:]]*#.*//' -e '/^[[:space:]]*$/d' -e '/^[[:space:]]*-/d' | sed -E 's/^([A-Za-z0-9_.-]+)(\[[^]]*\])?[[:space:]]*/\1 /' ;;
+        Gemfile) sed -nE "s/^[ \t]*gem[ \t]+[\\x27\"]([^'\"]+)[\\x27\"][ \t]*(,[ \t]*[\\x27\"]([^'\"]+)[\\x27\"])?.*/\1 \3/p" ;;
+        Cargo.toml) awk '/^\[/ {s = ($0 ~ /^\[(dev-|build-)?dependencies\]/) ? 1 : 0
+                               if (match($0, /^\[(dev-|build-)?dependencies\.[^]]+\]/)) {n = $0; sub(/^\[[a-z-]*dependencies\./, "", n); sub(/\]$/, "", n); print n, ""}
+                               next}
+                     s && /^[A-Za-z0-9_-]+[ \t]*=/ {n = $0; sub(/[ \t]*=.*/, "", n); v = $0; sub(/^[^=]*=[ \t]*/, "", v); gsub(/"/, "", v); print n, v}' ;;
+    esac
+}
+
+# --- new_dependency (manifests first, so a name is reported once, against its manifest, not again from its lockfile)
+seen="$(mktemp)"; trap 'rm -f "$flags" "$seen"' EXIT
+for pat in '(^|/)(package\.json|composer\.json|go\.mod|requirements[^/]*\.txt|Gemfile|Cargo\.toml)$' '(^|/)(package-lock\.json|composer\.lock|go\.sum)$'; do
+    while IFS= read -r f; do
+        oldf="$(jq -r --arg f "$f" '[.[] | select(.file == $f) | .old_file][0]' "$dir/atoms.json")"
+        old="$(show "$base" "$oldf" | names "$f" | awk '{print $1}' | sort -u || true)"
+        while read -r name ver; do
+            grep -qxF -- "$name" <<<"$old" && continue
+            grep -qxF -- "$name" "$seen" && continue
+            echo "$name" >> "$seen"
+            flag new_dependency "$name${ver:+ $ver}" "$f" exact
+        done < <(show "$head" "$f" | names "$f" | sort -u || true)
+    done < <(jq -r '[.[].file] | unique[]' "$dir/atoms.json" | grep -E "$pat" || true)
+done
+
+# --- new_migration
+while IFS= read -r f; do
+    flag new_migration "$f" "$f" exact
+done < <(jq -r '.[] | select(.status == "added") | .file' "$dir/atoms.json" | sort -u | grep -E '(^|/)(migrations?|migrate|alembic/versions)/' || true)
+
+# --- changed_config
+skip='(^|/)(tests?|spec|__tests__|node_modules|vendor)/'
+cfg='(^|/)(config|configs)/|(^|/)\.env(\.[^/]*)?$|(^|/)[^/]*\.env(\.[^/]*)?$|(^|/)config\.(ya?ml|json|toml|ini)$|(^|/)application[^/]*\.(properties|ya?ml)$'
+route='(^|/)routes?/|(^|/)routes?\.(rb|php|js|ts|py|go|ya?ml)$|(^|/)urls\.py$'
+while IFS= read -r f; do
+    if printf '%s\n' "$f" | grep -qE "$route"; then mode=route; else mode=key; fi
+    keys="$(jq -r --arg f "$f" --arg mode "$mode" '
+        [.[] | select(.file == $f) | .lines[] | select(startswith("+") or startswith("-"))
+         | {s: .[0:1], k: (.[1:] | if $mode == "route" then (capture("[\\x27\"](?<k>/[A-Za-z0-9_/{}:.*-]*)[\\x27\"]").k? // empty)
+                                   else (capture("^\\s*[\\x27\"]?(?<k>[A-Za-z0-9_.-]+)[\\x27\"]?\\s*(=>|:|=)").k? // empty) end)}
+         | select(.k != null and .k != "")]
+        | group_by(.k) | map({k: .[0].k, s: ([.[].s] | unique | join(""))})
+        | map((if .s == "+" then "+" elif .s == "-" then "-" else "~" end) + .k) | .[:10] | join(" ")' "$dir/atoms.json")"
+    [ -n "$keys" ] || continue # a config/routes directory match with no key change is plain code
+    flag changed_config "$f: $keys" "$f" exact
+done < <(jq -r '[.[].file] | unique[]' "$dir/atoms.json" | grep -E "$cfg|$route" | grep -vE "$skip" || true)
+
+# --- new_top_level_dir
+basetop="$(git -C "$wt" ls-tree --name-only "$base" | sort -u)"
+while IFS= read -r d; do
+    grep -qxF -- "$d" <<<"$basetop" || flag new_top_level_dir "$d/" "$d/" prefix
+done < <(jq -r '.[].file | select(contains("/")) | split("/")[0]' "$dir/atoms.json" | sort -u)
+
+jq -s '.' "$flags"
