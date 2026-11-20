@@ -29,6 +29,7 @@ const worktree = path.resolve(wtOpt ?? path.join(dataDir, 'worktree'));
 const token = crypto.randomBytes(16).toString('hex');
 const statePath = path.join(dataDir, 'state.json');
 const postBin = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'tour-post');
+const postedMem = new Map(); // draft id -> posted, kept in memory too: a failed state.json write must not allow a second post
 const posting = new Set(); // draft ids with a post in flight: a double click never posts twice
 
 function tokenOk(t) {
@@ -72,10 +73,17 @@ const isLine = (n) => Number.isInteger(n) && n > 0;
 // kind add: new_line inside the atom's new range. del: old_line inside its old range. ctx: both lines (unchanged line near the atom).
 function postArgs(d, atom) {
   if (!atom || !atom.old || !atom.new) return 'this atom has no lines to comment on';
-  const within = (r, n) => isLine(n) && n >= Math.max(1, r.start) && n <= r.start + Math.max(r.count, 1) - 1;
+  const within = (r, n) => isLine(n) && r.count > 0 && n >= r.start && n <= r.start + r.count - 1;
   if (d.kind === 'add') { if (!within(atom.new, d.new_line)) return 'new_line is outside the atom'; return ['--new-line', d.new_line]; }
   if (d.kind === 'del') { if (!within(atom.old, d.old_line)) return 'old_line is outside the atom'; return ['--old-line', d.old_line]; }
-  if (d.kind === 'ctx') { if (!isLine(d.old_line) || !isLine(d.new_line)) return 'a context line needs old_line and new_line'; return ['--old-line', d.old_line, '--new-line', d.new_line]; }
+  if (d.kind === 'ctx') { // the UI shows 3 unchanged lines either side: same window, and the old/new offset before or after the hunk
+    if (!isLine(d.old_line) || !isLine(d.new_line)) return 'a context line needs old_line and new_line';
+    const first = (r) => (r.count ? r.start : r.start + 1), last = (r) => (r.count ? r.start + r.count - 1 : r.start);
+    const near = (r, n) => n >= first(r) - 3 && n <= last(r) + 3;
+    const offsets = [first(atom.old) - first(atom.new), last(atom.old) - last(atom.new)];
+    if (!near(atom.new, d.new_line) || !near(atom.old, d.old_line) || !offsets.includes(d.old_line - d.new_line)) return 'the context line does not belong to the atom';
+    return ['--old-line', d.old_line, '--new-line', d.new_line];
+  }
   return 'kind must be add, del or ctx';
 }
 
@@ -91,7 +99,8 @@ async function postComment(res, body) {
   let state; try { state = readState(); } catch { return fail(res, 500, 'state.json is unreadable: fix or remove it'); }
   const d = state.drafts?.[id];
   if (!d) return fail(res, 404, 'no such draft: save it first');
-  if (d.posted) return fail(res, 409, `already posted (note ${d.posted.id})`);
+  const done = d.posted ?? postedMem.get(id);
+  if (done) return fail(res, 409, `already posted (note ${done.id})`);
   if (posting.has(id)) return fail(res, 409, 'a post for this draft is already in flight');
   const atom = readAtoms().find((a) => a.id === d.atom);
   const extra = postArgs(d, atom);
@@ -104,6 +113,7 @@ async function postComment(res, body) {
       posting.delete(id);
       if (err) return send(res, 502, JSON.stringify({ error: (stderr || stdout || String(err.message)).trim() }));
       let note; try { note = JSON.parse(stdout); } catch { return fail(res, 502, 'unexpected tour-post output: ' + stdout.trim()); }
+      postedMem.set(id, { id: note.id });
       try {
         const cur = readState(); // re-read: the browser may have saved meanwhile
         cur.drafts = { ...(cur.drafts ?? {}), [id]: { ...(cur.drafts?.[id] ?? d), posted: { id: note.id, url: note.url, inline: note.inline !== false } } };
@@ -111,6 +121,7 @@ async function postComment(res, body) {
         send(res, 200, JSON.stringify({ ok: true, draft: cur.drafts[id] }));
       } catch (e) { fail(res, 500, `posted as note ${note.id} (${note.url}) but state.json could not be saved: ${e.message}`); }
     });
+  child.stdin.on('error', () => {}); // tour-post may exit before reading the body; its exit code reports the failure
   child.stdin.end(d.body);
 }
 

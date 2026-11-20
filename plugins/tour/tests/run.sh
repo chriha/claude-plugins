@@ -17,6 +17,7 @@ case "$*" in
     "pr view"*"closingIssuesReferences"*) cat "$FIX/gh-pr.json" ;;   # real gh returns only number/url per closing issue
     "api -X POST repos/"*"/pulls/"*"/comments"*)   # tour-post (#43)
         if [ -e "$FIX/post-fail" ]; then echo '{"message": "Validation Failed"}'; echo "gh: Unprocessable Entity (HTTP 422)" >&2; exit 1; fi
+        [ -e "$FIX/slow" ] && sleep 1
         echo '{"id": 555, "html_url": "https://github.com/acme/app/pull/7#discussion_r555"}' ;;
     "issue view 3 "*"--json title,body"*) echo '{"title": "The ticket", "body": "ticket text"}' ;;
     "issue view"*) echo '{}' ;; *) echo "unexpected gh $*" >&2; exit 1 ;; esac
@@ -26,7 +27,7 @@ cat > "$tmp/stubs/glab" <<'STUB'
 echo "glab[$GITLAB_HOST] $*" >> "$STUB_LOG"
 case "$*" in
     api*/closes_issues) cat "$FIX/glab-issues.json" ;;
-    "api -X POST"*discussions*) cat > "$FIX/glab-payload.json"; cat "$FIX/glab-disc.json" ;;   # tour-post (#43)
+    "api -X POST"*discussions*) [ -e "$FIX/post-fail" ] && { echo "glab: 400 Bad request: position is invalid" >&2; exit 1; }; cat > "$FIX/glab-payload.json"; cat "$FIX/glab-disc.json" ;;   # tour-post (#43)
     api*/merge_requests/*) cat "$FIX/glab-mr.json" ;;
     *) echo "unexpected glab $*" >&2; exit 1 ;;
 esac
@@ -358,7 +359,7 @@ rc=0; ghcall --path src/app.txt --new-line 7 > "$tmp/post.out" 2> "$tmp/post.err
 eq "$rc" 1 "gh refusal exits 1"; eq "$(cat "$tmp/post.out")" "" "gh refusal prints no result"
 grep -Fq 'gh: Unprocessable Entity (HTTP 422)' "$tmp/post.err" || fail "gh error not verbatim: $(cat "$tmp/post.err")"
 rm "$FIX/post-fail"
-rc=0; "$bin/tour-post" "$tmp/pd-gh" --path f --new-line 0 </dev/null >/dev/null 2>&1 || rc=$?; eq "$rc" 2 "line 0 is usage"
+rc=0; printf x | "$bin/tour-post" "$tmp/pd-gh" --path f --new-line 0 >/dev/null 2>&1 || rc=$?; eq "$rc" 2 "line 0 is usage"
 rc=0; "$bin/tour-post" "$tmp/pd-gh" --path f </dev/null >/dev/null 2>&1 || rc=$?; eq "$rc" 2 "no line is usage"
 rc=0; printf '  \n' | "$bin/tour-post" "$tmp/pd-gh" --path f --new-line 1 >/dev/null 2>&1 || rc=$?; eq "$rc" 2 "empty comment is usage"
 rc=0; "$bin/tour-post" "$tmp/pd-gh" --path f --new-line "2 3" </dev/null >/dev/null 2>&1 || rc=$?; eq "$rc" 2 "two numbers in one line value is usage"
@@ -385,6 +386,10 @@ glcall --path src/old.txt --old-line 1 >/dev/null
 eq "$(pos | jq -c '.[1][4:8]')" '["src/old.txt","src/old.txt",1,null]' "gl deleted file"
 echo '{"id": "d2", "notes": [{"id": 78, "position": null}]}' > "$FIX/glab-disc.json"
 eq "$(glcall --path f.txt --new-line 2 | jq -c '[.id, .inline]')" '[78,false]' "gl dropped position reported"
+touch "$FIX/post-fail"; rc=0; glcall --path f.txt --new-line 2 > "$tmp/post.out" 2> "$tmp/post.err" || rc=$?
+eq "$rc" 1 "gl refusal exits 1"; eq "$(cat "$tmp/post.out")" "" "gl refusal prints no result"
+eq "$(cat "$tmp/post.err")" "glab: 400 Bad request: position is invalid" "gl error verbatim"; rm "$FIX/post-fail"
+cases=$((cases + 3))
 mkpd "$tmp/pd-gl2" "$(jq -n '{platform: "gitlab", project: "group/sub/proj", iid: 12, url: "https://gitlab.example.com/group/sub/proj/-/merge_requests/12", head_sha: "0000000000000000000000000000000000000000"}')"
 rm -f "$FIX/glab-payload.json"
 rc=0; printf 'x' | "$bin/tour-post" "$tmp/pd-gl2" --path f.txt --new-line 2 >/dev/null 2> "$tmp/post.err" || rc=$?
@@ -414,6 +419,9 @@ drafts='{"drafts": {
  "ctx": {"id": "ctx", "atom": "a1", "kind": "ctx", "old_line": 4, "new_line": 4, "body": "context"},
  "far": {"id": "far", "atom": "a1", "kind": "add", "new_line": 9, "body": "outside the atom"},
  "none": {"id": "none", "atom": "a4", "kind": "add", "new_line": 1, "body": "rename atom has no lines"},
+ "ctx2": {"id": "ctx2", "atom": "a1", "kind": "ctx", "old_line": 40, "new_line": 40, "body": "far"},
+ "ctx3": {"id": "ctx3", "atom": "a1", "kind": "ctx", "old_line": 4, "new_line": 5, "body": "offset"},
+ "slowd": {"id": "slowd", "atom": "a2", "kind": "add", "new_line": 6, "body": "slow"},
  "empty": {"id": "empty", "atom": "a1", "kind": "add", "new_line": 2, "body": " "}}}'
 eq "$(code "${H2[@]}" -X PUT -d "$drafts" "$base2/api/state")" 200 "drafts saved"
 : > "$STUB_LOG"
@@ -447,7 +455,15 @@ grep -Fq 'gh: Unprocessable Entity (HTTP 422)' "$tmp/body" || fail "error not ve
 eq "$(jq -r '.drafts.far | [has("posted"), .body] | join(" ")' "$cdata/state.json")" "false outside the atom" "failed post keeps the draft"
 rm "$FIX/post-fail"
 eq "$(code "${H2[@]}" -X POST -d '{"id":"far"}' "$base2/api/comment")" 200 "retry after a failure posts"
-cases=$((cases + 24))
+# ctx lines must belong to the atom (a1: -2 +2, so old == new); a double click posts once
+eq "$(code "${H2[@]}" -X POST -d '{"id":"ctx2"}' "$base2/api/comment")" 400 "context line far from the atom rejected"
+eq "$(code "${H2[@]}" -X POST -d '{"id":"ctx3"}' "$base2/api/comment")" 400 "context line with a wrong old/new offset rejected"
+touch "$FIX/slow"; : > "$STUB_LOG"
+curl -s -o "$tmp/b1" -w '%{http_code}' "${H2[@]}" -X POST -d '{"id":"slowd"}' "$base2/api/comment" > "$tmp/c1" & p1=$!
+sleep 0.3; c2="$(code "${H2[@]}" -X POST -d '{"id":"slowd"}' "$base2/api/comment")"; wait $p1
+eq "$c2" 409 "second click while the first is in flight"; eq "$(cat "$tmp/c1")" 200 "first click posts"
+eq "$(grep -c '^gh api -X POST' "$STUB_LOG")" 1 "double click posts once"; rm "$FIX/slow"
+cases=$((cases + 29))
 kill "$srv2" 2>/dev/null || true
 
 echo "tour: $cases cases ok"

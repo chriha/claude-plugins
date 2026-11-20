@@ -41,7 +41,8 @@ const draftList = () => Object.values(S.drafts);
 const unposted = () => draftList().filter((d) => !d.posted && d.body.trim());
 async function postDraft(d) {
   d.error = null; drawer();
-  await fetch('/api/state', { method: 'PUT', body: JSON.stringify(S) }).catch(() => {}); // the server posts what it has saved
+  const saved = await fetch('/api/state', { method: 'PUT', body: JSON.stringify(S) }).catch(() => null); // the server posts what it has saved
+  if (!saved?.ok) { d.error = 'could not save the draft before posting: ' + (saved ? (await saved.text()) : 'no connection'); drawer(); return; }
   try {
     const r = await fetch('/api/comment', { method: 'POST', body: JSON.stringify({ id: d.id }) });
     const j = await r.json();

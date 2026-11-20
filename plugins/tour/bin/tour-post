@@ -33,7 +33,7 @@ done
 [ -f "$dir/tour.json" ] || die "no tour.json in $dir"
 old_path=${old_path:-$path}
 [ -n "$old_line$new_line" ] || die "pass --new-line and/or --old-line"
-for n in "$old_line" "$new_line"; do case "$n" in ""|0) ;; *[!0-9]*|0*) die "line numbers are positive integers: $n" ;; esac; done
+for n in "$old_line" "$new_line"; do case "$n" in "") ;; *[!0-9]*|0*) die "line numbers are positive integers: $n" ;; esac; done
 case "$path$old_path" in *$'\n'*) die "bad path" ;; esac
 if [ "$body_file" = - ]; then body=$(cat); else [ -f "$body_file" ] || die "no such file: $body_file"; body=$(cat "$body_file"); fi
 [ -n "${body//[[:space:]]/}" ] || die "the comment is empty"
