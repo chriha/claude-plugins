@@ -152,9 +152,9 @@ function atomRows(a, lines) {
 function atomView(a, ch) {
   const sur = ch && surprise(ch, a);
   const box = h('div', { class: 'code' + (sur ? ' surprise' : ''), id: 'atom-' + a.id }, h('div', { class: 'file' }, h('a', { href: '#/f/' + encodeURIComponent(a.file) }, a.file),
-    h('span', { class: 'muted' }, ` ${a.id} · -${a.old.start},${a.old.count} +${a.new.start},${a.new.count}${a.kind ? ' · ' + a.kind : ''} `), sur && h('span', { class: 'badge warn' }, 'not predicted')));
+    h('span', { class: 'muted' }, ` ${a.id}${a.old && a.new ? ` · -${a.old.start},${a.old.count} +${a.new.start},${a.new.count}` : ''}${a.kind ? ' · ' + a.kind : ''} `), sur && h('span', { class: 'badge warn' }, 'not predicted')));
   fileLines(a.file).then((lines) => {
-    const { before, dels, adds, after } = atomRows(a, lines);
+    const { before, dels, adds, after } = a.old && a.new ? atomRows(a, lines) : { before: [], dels: [], adds: [], after: [] }; // rename, binary, mode and empty atoms have no hunk
     const num = (v, r) => (v == null || !r || !r.k ? h('span', { class: 'n' }, v ?? '')
       : h('span', { class: 'n cm' + (draftOf(a, r) ? ' drafted' : ''), title: 'comment on this line', onclick: () => startDraft(a, r) }, v));
     if (S.mode === 'split') {
