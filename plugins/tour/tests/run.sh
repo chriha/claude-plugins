@@ -472,4 +472,62 @@ eq "$(grep -c '^gh api -X POST' "$STUB_LOG")" 1 "double click posts once"; rm "$
 cases=$((cases + 29))
 kill "$srv2" 2>/dev/null || true
 
+# --- #45 server: chapter chat runs a read-only `claude -p --resume`, streams it, persists the session, shows CLI errors verbatim
+cat > "$tmp/stubs/claude-stub" <<'STUB'
+#!/usr/bin/env bash
+echo "claude $* | cwd=$(pwd -P) | key=${ANTHROPIC_API_KEY:-unset}" >> "$STUB_LOG"
+cat > "$FIX/claude-stdin.$(grep -c '^claude ' "$STUB_LOG")"
+if [ -e "$FIX/claude-fail" ]; then echo "Claude usage limit reached" >&2; exit 1; fi
+if [ -e "$FIX/claude-error-result" ]; then echo '{"type":"result","is_error":true,"result":"rate limited, resets at 5pm","session_id":"sess-0000-aaaa"}'; exit 1; fi
+echo '{"type":"system","subtype":"init","session_id":"sess-1234-abcd"}'
+echo '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hel"}},"session_id":"sess-1234-abcd"}'
+echo '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"lo"}},"session_id":"sess-1234-abcd"}'
+echo '{"type":"result","is_error":false,"result":"Hello","session_id":"sess-1234-abcd"}'
+STUB
+chmod +x "$tmp/stubs/claude-stub"
+chdata="$tmp/chdata"; mkdir -p "$chdata/worktree"; cp "$fx/tour.full.json" "$chdata/tour.json"; cp "$fx/atoms.json" "$chdata/atoms.json"
+ch="$(jq -r '.chapters[0].id' "$chdata/tour.json")"
+env -u ANTHROPIC_API_KEY TOUR_CLAUDE_BIN="$tmp/stubs/claude-stub" "$bin/tour-serve" "$chdata" --no-open > "$tmp/serve3.out" 2> "$tmp/serve3.err" &
+srv3=$!; trap 'kill $srv3 2>/dev/null; rm -rf "$tmp"' EXIT
+for _ in $(seq 50); do grep -q '^http' "$tmp/serve3.out" && break; sleep 0.1; done
+url3="$(head -1 "$tmp/serve3.out")"; base3="${url3%%/\?*}"; H3=(-H "X-Tour-Token: ${url3##*token=}")
+chat() { code "${H3[@]}" -X POST -d "$(jq -nc --arg c "$1" --arg m "$2" '{chapter: $c, message: $m}')" "$base3/api/chat"; }
+: > "$STUB_LOG"
+eq "$(chat "$ch" 'why is this guarded?')" 200 "chat answers"
+eq "$(grep '^data:' "$tmp/body" | sed 's/^data: //' | jq -rs '[.[] | select(.type == "text") | .text] | join("")')" "Hello" "reply streams as SSE text events"
+eq "$(grep '^data:' "$tmp/body" | tail -1)" 'data: {"type":"done"}' "stream ends with done"
+call="$(grep '^claude ' "$STUB_LOG" | head -1)"
+case "$call" in "claude -p --output-format stream-json --verbose --include-partial-messages --tools Read,Grep,Glob --allowedTools Read,Grep,Glob | cwd=$(cd "$chdata/worktree" && pwd -P) | key=unset") ;; *) fail "first call must be read-only, in the worktree, no key: $call" ;; esac
+case "$call" in *Bash*|*Edit*|*Write*|*--resume*) fail "first call has a write tool or a resume: $call" ;; esac
+grep -q 'Validate the import payload' "$FIX/claude-stdin.1" || fail "first message injects the chapter"
+grep -q 'why is this guarded?' "$FIX/claude-stdin.1" || fail "first message carries the question"
+eq "$(jq -r .session "$chdata/chat/$ch.json")" sess-1234-abcd "session id persisted"
+eq "$(chat "$ch" 'and the caller?')" 200 "second turn"
+case "$(grep '^claude ' "$STUB_LOG" | tail -1)" in *"--tools Read,Grep,Glob --allowedTools Read,Grep,Glob --resume sess-1234-abcd |"*) ;; *) fail "second turn resumes: $(tail -1 "$STUB_LOG")" ;; esac
+eq "$(cat "$FIX/claude-stdin.2")" 'and the caller?' "resumed turn sends only the question"
+code "${H3[@]}" "$base3/api/chat?chapter=$ch" >/dev/null
+eq "$(jq -c '[.messages[].role]' "$tmp/body")" '["user","assistant","user","assistant"]' "a reload gets the conversation back"
+# a restarted server resumes the stored session
+kill "$srv3"; wait "$srv3" 2>/dev/null || true
+env TOUR_CLAUDE_BIN="$tmp/stubs/claude-stub" "$bin/tour-serve" "$chdata" --no-open > "$tmp/serve3.out" 2> "$tmp/serve3.err" &
+srv3=$!
+for _ in $(seq 50); do grep -q '^http' "$tmp/serve3.out" && break; sleep 0.1; done
+url3="$(head -1 "$tmp/serve3.out")"; base3="${url3%%/\?*}"; H3=(-H "X-Tour-Token: ${url3##*token=}")
+eq "$(chat "$ch" 'after restart')" 200 "turn after a restart"
+case "$(grep '^claude ' "$STUB_LOG" | tail -1)" in *"--resume sess-1234-abcd |"*) ;; *) fail "restart resumes: $(tail -1 "$STUB_LOG")" ;; esac
+# CLI failures are shown verbatim and not retried
+n=$(grep -c '^claude ' "$STUB_LOG"); touch "$FIX/claude-fail"
+eq "$(chat "$ch" 'again')" 200 "failing CLI still streams"
+eq "$(grep '^data:' "$tmp/body" | tail -1 | sed 's/^data: //' | jq -r '[.type, .error] | join(": ")')" "error: Claude usage limit reached" "stderr shown verbatim"
+rm "$FIX/claude-fail"; touch "$FIX/claude-error-result"
+chat "$ch" 'again' >/dev/null
+eq "$(grep '^data:' "$tmp/body" | tail -1 | sed 's/^data: //' | jq -r .error)" "rate limited, resets at 5pm" "result error shown verbatim"
+rm "$FIX/claude-error-result"
+eq "$(grep -c '^claude ' "$STUB_LOG")" $((n + 2)) "one spawn per message, no retry"
+eq "$(chat nope 'x')" 404 "unknown chapter"
+eq "$(chat "$ch" ' ')" 400 "empty message"
+eq "$(code -X POST -d '{}' "$base3/api/chat")" 403 "chat needs the token"
+cases=$((cases + 19))
+kill "$srv3" 2>/dev/null || true
+
 echo "tour: $cases cases ok"

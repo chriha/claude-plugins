@@ -79,6 +79,37 @@ function drawer() {
 const chapters = () => [...tour.chapters, ...(tour.mechanical?.atoms?.length
   ? [{ id: 'mechanical', title: 'Mechanical', order_reason: tour.mechanical.note, blocks: [{ atoms: tour.mechanical.atoms, what: tour.mechanical.note, why: '', why_source: 'code', impact: [], watch: [] }] }] : [])];
 const has = (layer) => !!tour.layers?.includes(layer);
+// Chat: scoped to this chapter, streamed from POST /api/chat (server-sent events). Errors from the claude CLI are shown as they are.
+function chatPanel(ch) {
+  const log = h('div', { class: 'chatlog', 'aria-live': 'polite' }), input = h('textarea', { rows: '2', placeholder: 'Ask about this chapter', 'aria-label': 'Chat message' }), send = h('button', {}, 'Ask');
+  const add = (role, text) => { const el = h('div', { class: 'msg ' + role }, text); log.append(el); return el; };
+  getJSON('/api/chat?chapter=' + encodeURIComponent(ch.id)).then((c) => c.messages.forEach((m) => add(m.role, m.text))).catch(() => {});
+  async function ask() {
+    const message = input.value.trim();
+    if (!message || send.disabled) return;
+    input.value = ''; send.disabled = true; add('user', message);
+    const out = add('assistant', '');
+    try {
+      const r = await fetch('/api/chat', { method: 'POST', body: JSON.stringify({ chapter: ch.id, message }) });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `chat: ${r.status}`);
+      const rd = r.body.getReader(), dec = new TextDecoder(); let buf = '';
+      for (;;) {
+        const { done, value } = await rd.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        for (let i; (i = buf.indexOf('\n\n')) >= 0; buf = buf.slice(i + 2)) {
+          const e = JSON.parse(buf.slice(0, i).replace(/^data: /, ''));
+          if (e.type === 'text') out.textContent += e.text; else if (e.type === 'error') add('error', e.error);
+        }
+      }
+    } catch (e) { add('error', e.message); }
+    if (!out.textContent) out.remove();
+    send.disabled = false;
+  }
+  send.onclick = ask;
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); ask(); } });
+  return h('div', { class: 'card chat' }, h('b', {}, 'Ask about this chapter'), h('p', { class: 'muted' }, 'Answers come from claude with read-only tools on the MR checkout, using your CLI login. It counts against your subscription limits.'), log, input, h('p', {}, send));
+}
 // Active review: an atom counts as anticipated when the reviewer's prediction names its file path, file name or file stem.
 const anticipated = (a, text) => { const t = text.toLowerCase(), f = a.file.toLowerCase(), name = f.split('/').pop(), stem = name.replace(/\.[^.]*$/, ''); return t.includes(f) || t.includes(name) || (stem.length > 2 && t.includes(stem)); };
 const surprise = (ch, a) => { const p = S.predictions[ch.id]; return !!(p?.revealed && p.text.trim() && !anticipated(a, p.text)); };
@@ -193,7 +224,7 @@ function chapterView(id) {
   const body = gated ? null : ch.id === 'mechanical' ? h('details', {}, h('summary', {}, 'Show mechanical changes'), blocks) : blocks;
   show($main, h('p', {}, h('a', { href: '#/' }, 'Overview'), ' · ', nav(all[idx - 1], '← previous (p)'), ' · ', nav(all[idx + 1], 'next (n) →')),
     h('h1', {}, `${idx + 1}. ${ch.title}`), h('p', { class: 'muted' }, ch.order_reason),
-    active && (gated ? gate(ch) : revealed(ch)), body);
+    active && (gated ? gate(ch) : revealed(ch)), body, chatPanel(ch));
   paint();
 }
 // Active review: teaser and prediction box, then reveal. The prediction only goes to state.json via the local server.
