@@ -5,8 +5,8 @@ const node = (tag) => ({ tag, children: [], attrs: {}, className: '', classList:
   append(...k) { this.children.push(...k); }, replaceChildren(...k) { this.children = k; }, setAttribute(k, v) { this.attrs[k] = v; },
   addEventListener() {}, remove() {}, set textContent(t) { this.children = [String(t)]; }, set innerHTML(t) { this.children = [t]; } });
 const text = (n) => (typeof n === 'string' ? n : (n.children ?? []).map(text).join(' '));
-const main = node('main'), bar = node('div');
-globalThis.document = { createElement: node, getElementById: (id) => (id === 'main' ? main : id === 'bar' ? bar : null), querySelectorAll: () => [], documentElement: { dataset: {} }, head: node('head'), body: node('body') };
+const els = { main: node('main'), bar: node('header'), side: node('nav'), insp: node('aside'), status: node('footer') }, main = els.main;
+globalThis.document = { createElement: node, getElementById: (id) => els[id] ?? null, querySelectorAll: () => [], documentElement: { dataset: {} }, head: node('head'), body: node('body') };
 globalThis.addEventListener = () => {}; globalThis.scrollTo = () => {}; globalThis.matchMedia = () => ({ matches: false });
 globalThis.location = { hash: '#/c/c1' };
 const atoms = [
@@ -16,7 +16,8 @@ const atoms = [
   { id: 'a4', file: 'empty.txt', old_file: null, status: 'added', kind: 'add', old: null, new: null, lines: [], mode: null },
 ];
 const block = { atoms: atoms.map((a) => a.id), what: 'no-hunk atoms', why: '', why_source: 'code', impact: [], watch: [] };
-const api = { '/api/tour': { mr: { title: 't', head_sha: 'abcdef012345' }, chapters: [{ id: 'c1', title: 'C', order_reason: 'r', blocks: [block] }], layers: [] }, '/api/atoms': { atoms }, '/api/state': {} };
+const api = { '/api/tour': { mr: { platform: 'github', project: 'o/r', iid: 1, title: 't', url: 'https://github.com/o/r/pull/1', base_sha: '0123456789ab', head_sha: 'abcdef012345' },
+  summary: { intent: 'i', approach: 'a', risk: 'low', risk_reasons: [] }, chapters: [{ id: 'c1', title: 'C', order_reason: 'r', blocks: [block] }], mechanical: { atoms: [], note: 'n' }, layers: ['base'] }, '/api/atoms': { atoms }, '/api/state': {} };
 globalThis.fetch = async (url) => (api[url] ? { ok: true, json: async () => api[url] } : { ok: false, status: 404, text: async () => '' });
 const bad = []; process.on('unhandledRejection', (e) => bad.push(e));
 import(pathToFileURL(process.argv[2]).href).catch((e) => bad.push(e));
