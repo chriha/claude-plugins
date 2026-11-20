@@ -35,7 +35,7 @@ Deviate when the story reads better (a refactor whose tests come first), and the
 ## Optional layers (only when the cost gate chose them)
 
 - `deep`: `callers` = who calls or depends on the changed symbol, as `{symbol, file}`; real hits only, from CodeGraph or grep.
-- `active`: `intent` is a one-line teaser that does not give the answer away; `probes` are 2-3 "how could this break" questions,
+- `active`: `intent` is a one-line teaser that does not give the answer away (the reviewer predicts what changes and where, then the UI reveals the chapter and marks atoms whose file the prediction did not name, so keep file and symbol names out of it); `probes` are 2-3 "how could this break" questions,
   each with a short test snippet in the repo's framework (look at an existing test for the style).
 - `arch`: a small Mermaid `graph` of the touched modules before and after; no more than ~12 nodes.
 - `rules`: flag only a clear break of a written rule; quote the rule, name its file; skip style opinions.

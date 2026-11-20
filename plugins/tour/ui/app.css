@@ -29,3 +29,7 @@ main { max-width:1400px; margin:0 auto; padding:16px; }
 ul.plain { list-style:none; padding:0; margin:4px 0; }
 pre.mermaid { overflow:auto; }
 @media (max-width:800px) { .block { grid-template-columns:1fr; } .row.split { font-size:11px; } }
+.code.surprise { border-color:var(--warn); box-shadow:inset 3px 0 0 var(--warn); }
+textarea { width:100%; font:inherit; color:var(--fg); background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:6px; }
+pre.snippet { font:12.5px/1.45 ui-monospace, Menlo, monospace; background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:8px; overflow:auto; }
+ul.callers { margin-left:12px; }

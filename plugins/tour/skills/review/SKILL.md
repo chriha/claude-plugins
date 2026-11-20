@@ -64,9 +64,9 @@ code at the head, and `tour-drift <dir>` output for `drift`.
 - Evidence: `why` cites the ticket text, the MR text or code, and `why_source` says which; never invent intent, write what is
   unclear and use `unclear`. `impact` names concrete symbols and files.
 - `deep` chosen: for each changed symbol add `callers` (CodeGraph when `<worktree>/.codegraph/` exists, else grep in the worktree).
-- `active` chosen: per chapter `intent` (teaser) and 2-3 `probes` (a question plus a test snippet in the repo's test framework).
+- `active` chosen: per chapter (not `mechanical`) `intent` and 2-3 `probes` (a question plus a test snippet in the repo's test framework). The UI shows `intent` before the reviewer predicts what changes and reveals the chapter afterwards, so it must not name the files or symbols that change.
 - `arch` chosen: `graph.mermaid`, before/after of the modules the change touches.
-- `rules` chosen: read the repo's `CLAUDE.md` and `.claude/rules/*` (in the worktree), add `rules_flags` to blocks that break a
+- `rules` chosen (the UI shows each flag on its block): read the repo's `CLAUDE.md` and `.claude/rules/*` (in the worktree), add `rules_flags` to blocks that break a
   rule, quoting the rule and its source file; no flag when nothing is broken.
 - **Big MR (changed lines > 2000):** group atoms by top-level directory (split a huge directory by subdirectory), generate the
   chapters of each batch separately with only that batch's atoms, then merge: join chapters that belong together, re-apply
