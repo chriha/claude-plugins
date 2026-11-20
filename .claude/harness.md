@@ -10,16 +10,16 @@ forge: github
 <!-- tracker: linear → also linear_mcp: (MCP server name, default linear), linear_team: (team key), linear_accept_state: (default Todo) -->
 
 ## Commands
-test: bash plugins/harness/tests/run.sh
+test: bash plugins/harness/tests/run.sh && bash plugins/tour/tests/run.sh
 static: for p in plugins/*; do claude plugin validate "$p" --profile directory; done
 format:    <!-- none -->
 build:    <!-- none; plain bash + markdown -->
 setup-worktree:    <!-- none -->
-test-affected: bash plugins/harness/tests/run.sh    <!-- single suite; no subsetting -->
+test-affected: bash plugins/harness/tests/run.sh && bash plugins/tour/tests/run.sh    <!-- whole suites; no subsetting -->
 
 ## Scripts
-test_file_glob: `plugins/harness/tests/**`
-red_check_test_cmd: `bash plugins/harness/tests/run.sh`    <!-- appended file args are ignored by run.sh -->
+test_file_glob: `plugins/*/tests/**`
+red_check_test_cmd: `bash plugins/harness/tests/run.sh && bash plugins/tour/tests/run.sh`    <!-- appended file args (to the last command) are ignored by run.sh -->
 exclude_from_size: 
 
 ## Branch & commits
