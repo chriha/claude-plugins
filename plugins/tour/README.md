@@ -1,14 +1,34 @@
 # tour
 
-Status: in development. Nothing works yet.
+Status: in development. `/tour:review` works; `/tour:clean` is not written yet.
 
-Guided review of a GitLab or GitHub MR/PR, human or AI authored. `/tour:review <id|url>` will group the change into chapters,
+Guided review of a GitLab or GitHub MR/PR, human or AI authored. `/tour:review <id|url>` groups the change into chapters,
 explain each one, and open a local web UI. The goal is that the reviewer understands the change. It is not a bug hunter
 (`/harness:review` and `/code-review` do that), never runs automatically and never posts comments without an explicit click.
 
-Planned skills: `/tour:review` (model `opus`), `/tour:clean` (model `haiku`).
+Skills: `/tour:review` (model `opus`), `/tour:clean` (model `haiku`, planned).
 
 The plugin stands alone: it does not need `harness`; shared code is copied into `bin/`.
+
+## `/tour:review <id|url> [--regenerate] [--no-open]`
+
+You start it; nothing triggers it (no push, schedule or HEAD hook). It runs in your own Claude Code session, so it uses that session's auth.
+
+1. `tour-fetch` fetches the change (GitHub via `gh`, GitLab via `glab`). When a tour for the same head SHA is already cached, the UI opens right away and **no tokens are spent**. `--regenerate` drops the cached `tour.json` and builds a new one. `--no-open` skips the browser and prints the `tour-serve` command instead.
+2. It shows diff stats and a token estimate (heuristic: diff tokens x layer factor, as small/medium/large plus a number) per layer.
+3. **Cost gate** (`AskUserQuestion`): you pick the optional layers before any tokens go into them. Base (chapters, reading order, what/why/impact) is always on, and drift flags are always included because they are deterministic and free.
+
+   | Optional layer | Default | Adds |
+   |---|---|---|
+   | Deep context | off | callers/dependents per changed symbol (CodeGraph when `.codegraph/` exists, else grep) |
+   | Active review | off | a teaser and 2-3 break-it probes per chapter, with a test snippet in the repo's framework |
+   | Architecture delta | off | before/after graph as Mermaid source |
+   | Rules check | off | flags against the repo's `CLAUDE.md` and `.claude/rules/*` |
+
+   A skipped layer writes none of its fields and gets no exploration. Chat is not part of generation.
+4. It writes `tour.json`, runs `tour-validate` and repairs what it lists (at most 2 repair rounds), then starts `tour-serve`.
+
+Changes above about 2000 changed lines are generated in batches by directory and merged; above 10000 it suggests splitting the MR. Reading order and wording rules live in `references/writing-guide.md`; the eval case is `evals/review-cost-gate-fix-loop`.
 
 ## Helpers (`bin/`)
 
