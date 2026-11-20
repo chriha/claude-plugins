@@ -4,7 +4,7 @@ The contract between the generating skill (`/tour:review`), the validator (`bin/
 single source of truth: change it first, then the validator, fixtures and UI.
 
 Validate with `bin/tour-validate <tour.json> <atoms.json>`. It prints nothing and exits 0 when valid. Otherwise it prints one
-`<json path>: <reason>` per line on stderr and exits 1 (exit 2: unreadable or not JSON). Fix loop in the skill: run it, repair
+`<json path>: <reason>` per line on stderr, then a `tour-validate: N error(s)` summary line, and exits 1 (exit 2: usage, unreadable or not JSON). Fix loop in the skill: run it, repair
 exactly the listed paths, run again, at most 2 repair rounds.
 
 Fixtures to build the UI against, both valid for `fixtures/atoms.json`:

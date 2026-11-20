@@ -10,7 +10,7 @@ set -euo pipefail
 command -v jq >/dev/null || { echo "tour-validate: jq is required" >&2; exit 2; }
 for f in "$1" "$2"; do
     [ -r "$f" ] || { echo "tour-validate: cannot read $f" >&2; exit 2; }
-    jq -e . "$f" >/dev/null 2>&1 || { echo "tour-validate: $f is not valid JSON" >&2; exit 2; }
+    jq . "$f" >/dev/null 2>&1 || { echo "tour-validate: $f is not valid JSON" >&2; exit 2; }
 done
 
 # the listed layers, as a JSON array of strings (tolerant: bad shapes are reported by the main program)

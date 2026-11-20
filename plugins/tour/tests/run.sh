@@ -84,6 +84,8 @@ rc=0; "$bin/tour-validate" "$fx/tour.full.json" >/dev/null 2>&1 || rc=$?; eq "$r
 printf '{' > "$tmp/broken.json"
 rc=0; "$bin/tour-validate" "$tmp/broken.json" "$fx/atoms.json" >/dev/null 2>&1 || rc=$?; eq "$rc" 2 "invalid JSON exit"
 rc=0; "$bin/tour-validate" "$tmp/missing.json" "$fx/atoms.json" >/dev/null 2>&1 || rc=$?; eq "$rc" 2 "missing file exit"
-cases=$((cases + 3))
+printf "null" > "$tmp/null.json"
+rc=0; "$bin/tour-validate" "$tmp/null.json" "$fx/atoms.json" >/dev/null 2>&1 || rc=$?; eq "$rc" 1 "null JSON exit"
+cases=$((cases + 4))
 
 echo "tour: $cases cases ok"
