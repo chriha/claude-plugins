@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tour tests: bash plugins/tour/tests/run.sh (needs jq). Exits non-zero on the first failure.
+# tour tests: bash plugins/tour/tests/run.sh (needs jq; the server cases need node >= 18 and curl). Exits non-zero on the first failure.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 bin="$root/bin"; fx="$root/fixtures"
@@ -87,5 +87,57 @@ rc=0; "$bin/tour-validate" "$tmp/missing.json" "$fx/atoms.json" >/dev/null 2>&1 
 printf "null" > "$tmp/null.json"
 rc=0; "$bin/tour-validate" "$tmp/null.json" "$fx/atoms.json" >/dev/null 2>&1 || rc=$?; eq "$rc" 1 "null JSON exit"
 cases=$((cases + 4))
+
+# --- #42 tour-serve / server.mjs (needs node >= 18 and curl)
+data="$tmp/data"; mkdir -p "$data/worktree/app" "$tmp/outside"
+cp "$fx/tour.full.json" "$data/tour.json"; cp "$fx/atoms.json" "$data/atoms.json"
+printf 'line1\nline2\n' > "$data/worktree/app/a.txt"; echo SECRET > "$tmp/outside/secret.txt"
+ln -s "$tmp/outside/secret.txt" "$data/worktree/app/link.txt"
+"$bin/tour-serve" "$data" --no-open > "$tmp/serve.out" 2> "$tmp/serve.err" &
+srv=$!; trap 'kill $srv 2>/dev/null; rm -rf "$tmp"' EXIT
+for _ in $(seq 50); do grep -q '^http' "$tmp/serve.out" && break; sleep 0.1; done
+url="$(head -1 "$tmp/serve.out")"
+case "$url" in http://127.0.0.1:[0-9]*/\?token=[0-9a-f]*) ;; *) fail "serve url [$url] $(cat "$tmp/serve.err")" ;; esac
+base="${url%%/\?*}"; tok="${url##*token=}"; cases=$((cases + 1))
+code() { curl -s -o "$tmp/body" -w '%{http_code}' "$@"; }
+H=(-H "X-Tour-Token: $tok")
+eq "$(code "$base/")" 403 "no token: page rejected"
+eq "$(code "$base/api/tour")" 403 "no token: api rejected"
+eq "$(code "$base/api/tour" -H 'X-Tour-Token: nope')" 403 "wrong token rejected"
+eq "$(code "$base/?token=nope")" 403 "wrong query token rejected"
+eq "$(code "$base/?token=$tok")" 302 "query token redirects"
+eq "$(curl -s -D - -o /dev/null "$base/?token=$tok" | grep -ci '^set-cookie: tour=')" 1 "token sets cookie"
+jar="-b tour=$tok"
+eq "$(code $jar "$base/")" 200 "cookie auth serves the page"
+grep -q '<title>Tour</title>' "$tmp/body" || fail "index.html body"
+eq "$(code "${H[@]}" "$base/app.js")" 200 "app.js served"
+eq "$(code "${H[@]}" "$base/server/server.mjs")" 404 "non-ui file not served"
+eq "$(code "${H[@]}" -H 'Host: evil.example' "$base/api/tour")" 403 "foreign Host rejected"
+eq "$(code "${H[@]}" "$base/api/tour")" 200 "tour served"
+eq "$(jq -r .mr.iid "$tmp/body")" 1234 "tour body"
+eq "$(code "${H[@]}" "$base/api/atoms")" 200 "atoms served"
+eq "$(jq '.atoms | length' "$tmp/body")" 10 "atoms body"
+cases=$((cases + 11))
+
+eq "$(code "${H[@]}" "$base/api/state")" 200 "state GET (none yet)"; eq "$(cat "$tmp/body")" '{}' "empty state"
+eq "$(code "${H[@]}" -X PUT -d '{"understood":{"c1/0":true},"pos":{"chapter":"c1","block":0}}' "$base/api/state")" 200 "state PUT"
+eq "$(code "${H[@]}" "$base/api/state")" 200 "state GET"; eq "$(jq -r '.understood["c1/0"]' "$tmp/body")" true "state persisted"
+eq "$(jq -r '.pos.chapter' "$data/state.json")" c1 "state.json written beside tour.json"
+eq "$(code "${H[@]}" -X PUT -d '[1]' "$base/api/state")" 400 "state PUT rejects non-object"
+eq "$(code "${H[@]}" -X PUT -d 'not json' "$base/api/state")" 400 "state PUT rejects invalid JSON"
+eq "$(code -X PUT -d '{}' "$base/api/state")" 403 "state PUT needs the token"
+cases=$((cases + 8))
+
+eq "$(code "${H[@]}" "$base/api/file?path=app/a.txt")" 200 "file served"; eq "$(head -1 "$tmp/body")" line1 "file body"
+eq "$(code "${H[@]}" "$base/api/file?path=../outside/secret.txt")" 404 "traversal rejected"
+eq "$(code "${H[@]}" "$base/api/file?path=app/%2e%2e/%2e%2e/outside/secret.txt")" 404 "encoded traversal rejected"
+eq "$(code "${H[@]}" "$base/api/file?path=$tmp/outside/secret.txt")" 404 "absolute path rejected"
+eq "$(code "${H[@]}" "$base/api/file?path=app/link.txt")" 404 "symlink out of the worktree rejected"
+eq "$(code "${H[@]}" "$base/api/file?path=app")" 404 "directory rejected"
+eq "$(code "${H[@]}" "$base/api/file")" 404 "missing path rejected"
+cases=$((cases + 8))
+rc=0; "$bin/tour-serve" "$tmp/nodir" >/dev/null 2>&1 || rc=$?; eq "$rc" 1 "serve without tour.json exits 1"
+cases=$((cases + 1))
+kill "$srv" 2>/dev/null || true
 
 echo "tour: $cases cases ok"
