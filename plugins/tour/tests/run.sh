@@ -201,6 +201,28 @@ jq -n --arg sha "$p_head" '{number: 3, title: "P", body: "", url: "u", baseRefNa
 pd="$("$bin/tour-fetch" 3 | jq -r .dir)"
 eq "$("$bin/tour-drift" "$pd" | jq -c .)" "[]" "plain code change flags nothing"
 
+# --- #51 tour-fetch: C-quoted paths in diff headers and rename lines are unquoted
+remote_repo "$tmp/qp" 'git@github.com:acme/quoted.git'
+cd "$tmp/qp"
+q_quote='quo"te.txt'; q_tab="$(printf 'tab\there.txt')"; q_back='back\slash.txt'; q_ctl="$(printf 'ctl\001x.txt')"
+q_nl="$(printf 'new\nline.txt')"; q_sp='sp ace"q.txt'
+for f in "$q_quote" "$q_tab" "$q_back" "$q_ctl" "$q_nl" "$q_sp" 'my file.txt' 'héllo.txt' 'plain.txt' "$(printf 'ren\tfrom.txt')" 'old"name.txt'; do printf 'one\n' > "$f"; done
+git add -A && git commit -qm base && git push -q origin main
+for f in "$q_quote" "$q_tab" "$q_back" "$q_ctl" "$q_nl" "$q_sp" 'my file.txt' 'héllo.txt'; do printf 'two\n' > "$f"; done
+git mv "$(printf 'ren\tfrom.txt')" 'ren"to.txt'; git mv 'old"name.txt' 'plain-new.txt'; git mv 'plain.txt' "$(printf 'to\ttab.txt')"
+q_head="$(pr "$tmp/qp" refs/pull/9/head feature/quoted 'quoted')"
+jq -n --arg sha "$q_head" '{number: 9, title: "Q", body: "", url: "u", baseRefName: "main", headRefName: "feature/quoted", headRefOid: $sha, closingIssuesReferences: []}' > "$FIX/gh-pr.json"
+qa="$("$bin/tour-fetch" 9 | jq -r .atoms_file)"
+for f in "$q_quote" "$q_tab" "$q_back" "$q_ctl" "$q_nl" "$q_sp" 'my file.txt' 'héllo.txt'; do
+    eq "$(jq -r --arg f "$f" '[.[] | select(.file == $f and .old_file == $f and .kind == "hunk")] | length' "$qa")" 1 "atom with the real path for [$f]"
+done
+# identical content, so git pairs the renames by name order: both sides quoted, quoted → plain, plain → quoted
+eq "$(jq -r --arg f "$(printf 'to\ttab.txt')" --arg o "$(printf 'ren\tfrom.txt')" '[.[] | select(.file == $f and .old_file == $o and .kind == "rename" and .status == "renamed")] | length' "$qa")" 1 "quoted rename, both sides quoted"
+eq "$(jq -r '[.[] | select(.file == "plain-new.txt" and .old_file == "old\"name.txt" and .kind == "rename")] | length' "$qa")" 1 "rename from a quoted path to a plain one"
+eq "$(jq -r '[.[] | select(.file == "ren\"to.txt" and .old_file == "plain.txt" and .kind == "rename")] | length' "$qa")" 1 "rename from a plain path to a quoted one"
+eq "$(jq -r '[.[] | select((.file | startswith("\"")) or (.old_file | startswith("\"")))] | length' "$qa")" 0 "no path keeps its quotes"
+cd "$tmp/gh"
+
 
 # --- #40/#42 tour-validate and tour-serve
 root="$(dirname "$bin")"; fx="$root/fixtures"; cases=0

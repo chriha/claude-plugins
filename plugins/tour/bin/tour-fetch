@@ -124,8 +124,18 @@ git -c core.quotepath=false diff -U0 -M --no-color --no-ext-diff --no-textconv -
     --src-prefix=a/ --dst-prefix=b/ "$base_sha" "$head_sha" > "$dir/diff.patch"
 
 jq -Rn '
-  def newfile($l): ($l | ltrimstr("diff --git a/")) as $r
-      | ((($r | length) - 3) / 2 | floor) as $n | $r[:$n] | {path: ., old_file: ., status: "modified", binary: false, mode: null, hunks: []};
+  # git C-quotes a path holding ", \ or a control character: "a/quo\"te", \t \n \\ \" and 3-digit octal bytes (octal is read as a code point: enough for control characters; invalid UTF-8 names are unsupported)
+  def unq: if startswith("\"") and endswith("\"") and length >= 2 then
+        .[1:-1] | gsub("\\\\(?<c>[0-7]{3}|.)"; .c as $c
+            | if ($c | length) == 3 then [($c | explode | map(. - 48)) as $d | $d[0] * 64 + $d[1] * 8 + $d[2]] | implode
+              else ({t: "\t", n: "\n", r: "\r", a: "\u0007", b: "\b", f: "\f", v: "\u000b"})[$c] // $c end)
+      else . end;
+  # the b/ path of a `diff --git` header: after a quoted "a/…" token, else a quoted "b/…" token, else the second of two equal-length plain paths
+  def newfile($l): ($l | ltrimstr("diff --git ")) as $r
+      | (if ($r | startswith("\"")) then ($r | capture("^\"(?:[^\"\\\\]|\\\\.)*\" (?<b>.*)$").b | unq)
+         elif ($r | contains(" \"b/")) then ($r | split(" \"b/")[1:] | join(" \"b/") | "\"b/" + . | unq)
+         else $r[((($r | length) + 1) / 2 | floor):] end)
+        | ltrimstr("b/") | {path: ., old_file: ., status: "modified", binary: false, mode: null, hunks: []};
   def finish: if .cur == null then . else .files += [.cur] | .cur = null end;
   reduce inputs as $l ({files: [], cur: null, inhunk: false};
     if ($l | startswith("diff --git ")) then finish | .cur = newfile($l) | .inhunk = false
@@ -139,8 +149,8 @@ jq -Rn '
     elif $l | startswith("new mode ") then .cur.mode.new = ($l | ltrimstr("new mode "))
     elif $l | startswith("new file mode ") then .cur.status = "added"
     elif $l | startswith("deleted file mode ") then .cur.status = "deleted"
-    elif $l | startswith("rename from ") then .cur.old_file = ($l | ltrimstr("rename from ")) | .cur.status = "renamed"
-    elif $l | startswith("rename to ") then .cur.path = ($l | ltrimstr("rename to "))
+    elif $l | startswith("rename from ") then .cur.old_file = ($l | ltrimstr("rename from ") | unq) | .cur.status = "renamed"
+    elif $l | startswith("rename to ") then .cur.path = ($l | ltrimstr("rename to ") | unq)
     elif ($l | startswith("Binary files ")) or ($l | startswith("GIT binary patch")) then .cur.binary = true
     else . end)
   | finish | .files
