@@ -9,7 +9,8 @@
 # and mode.
 # Writes <new-data-dir>/delta.json and prints it:
 #   {"since": "<old head sha>", "head": "<new head sha>", "total": N,
-#    "unchanged": [{"id": "<new atom>", "old_id": "<old atom>"}], "changed": [{"id": "<new atom>", "status": "new|changed"}]}
+#    "unchanged": [{"id": "<new atom>", "old_id": "<old atom>"}], "changed": [{"id": "<new atom>", "status": "new|changed"}],
+#    "removed": ["<old atom with no counterpart in the new head: dropped or reworked by the push>"]}
 #
 set -euo pipefail
 
@@ -34,7 +35,7 @@ jq -n --slurpfile oa "$old/atoms.json" --slurpfile na "$new/atoms.json" \
         | if ((.pool[$k] // []) | length) > 0
           then .unchanged += [{id: $a.id, old_id: .pool[$k][0]}] | .pool[$k] |= .[1:]
           else .changed += [{id: $a.id, status: (if ($oldfiles | index($a.file)) != null then "changed" else "new" end)}] end)) as $r
-  | {since: $om[0].head_sha, head: $nm[0].head_sha, total: ($news | length), unchanged: $r.unchanged, changed: $r.changed}
+  | {since: $om[0].head_sha, head: $nm[0].head_sha, total: ($news | length), unchanged: $r.unchanged, changed: $r.changed, removed: ([$r.pool[]] | add // [])}
 ' > "$new/delta.json.tmp" || { rm -f "$new/delta.json.tmp"; die "could not read the atoms"; }
 mv "$new/delta.json.tmp" "$new/delta.json"
 cat "$new/delta.json"

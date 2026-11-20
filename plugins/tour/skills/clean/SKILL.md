@@ -12,10 +12,11 @@ writes). A tour is one MR/PR head: its worktree, `tour.json`, `state.json`, draf
 `tour-clean` does it, and only after the user confirms.
 
 `$ARGUMENTS`: optional `--older-than <N>d|<N>w`. Default: **30d** (a tour counts as old when none of its `meta.json`,
-`tour.json` and `state.json` was touched in that time, so a tour you still open stays). Anything else: say
+`tour.json` and `state.json` was touched in that time; `state.json` changes when you mark progress, annotate or draft, so a tour
+you keep working in stays, one you only read does not). Pass the value through to `tour-clean` unchanged (`4w` stays `4w`). Anything else: say
 `usage: /tour:clean [--older-than 30d]` and stop.
 
-1. Dry run: `${CLAUDE_PLUGIN_ROOT}/bin/tour-clean [--older-than <N>d]`. It deletes nothing; it prints one `<age> <size> <dir>` line per
+1. Dry run: `${CLAUDE_PLUGIN_ROOT}/bin/tour-clean [--older-than <value>]`. It deletes nothing; it prints one `<age> <size> <dir>` line per
    tour that would go, then a `total` line. A tool error is shown as is; stop.
 2. No tours listed: say so and stop.
 3. Show the list and the total to the user (age, size, directory), then ask once with `AskUserQuestion`: delete these N tours

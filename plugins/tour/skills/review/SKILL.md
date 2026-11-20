@@ -29,7 +29,8 @@ No id/URL: say `usage: /tour:review <id|url> [--regenerate] [--no-open]` and sto
    `${CLAUDE_PLUGIN_ROOT}/bin/tour-delta <previous.dir> <dir>` (prints and writes `<dir>/delta.json`: `unchanged` atoms paired with
    their old ids, `changed` atoms marked `new` or `changed`) and generate a delta tour (step 4, "Delta tour"). `changed` is empty:
    say the diff is the same as the previous tour's (only line positions moved), serve the previous tour
-   (`tour-serve <previous.dir> --worktree <previous.dir>/worktree`, step 7) and stop. `previous` null: nothing to ask.
+   (`tour-serve <previous.dir> --worktree <previous.dir>/worktree`, step 7), tell the user it belongs to the older head
+   `<previous.head_sha short>` (annotations and posts go there; a post fails once the head moved) and stop. `previous` null: nothing to ask.
 
 ## 2. Size and estimate
 
@@ -78,9 +79,12 @@ code at the head, and `tour-drift <dir>` output for `drift`.
   rule, quoting the rule and its source file; no flag when nothing is broken.
 - **Delta tour** (chosen in step 1): chapters cover only the `changed` atoms of `<dir>/delta.json`; read and explain nothing else.
   Put every `unchanged` atom in `mechanical.atoms` with `mechanical.note`
-  `Unchanged since <previous.head_sha short>: see the earlier tour (<previous.dir>/tour.json)`. They are not re-explained, read or
+  `Unchanged since <previous.head_sha short>: see the earlier tour (<previous.dir>/tour.json)`. When the previous tour is itself a delta
+  tour, an atom paired with one of its `mechanical` atoms points on to the tour that note names (join the references with `; `), so
+  the reference always leads to the tour that explains it. They are not re-explained, read or
   looked up, so they cost no tokens. A `changed` atom of a file the old head touched (`status: changed`) is a new version of
-  something the earlier tour explained: say what is different now, not the whole story again. Set `summary.intent` and `approach` for
+  something the earlier tour explained: say what is different now, not the whole story again. `delta.json` `removed` lists old atoms the push dropped or reworked: name them in `summary.approach`
+  (the earlier tour still describes them). Set `summary.intent` and `approach` for
   the push (what it changes), and add to `summary.risk_reasons` only reasons that come from the delta. Layers, drift and
   validation work as in a full tour; `tour-drift` still runs over the whole MR.
 - **Big MR (changed lines > 2000):** group atoms by top-level directory (split a huge directory by subdirectory), generate the

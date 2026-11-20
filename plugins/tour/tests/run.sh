@@ -589,10 +589,11 @@ eq "$(jq -r '(.unchanged | length) + (.changed | length)' <<<"$d46")" "$new_n" "
 eq "$(jq -rn --slurpfile d "$dir2/delta.json" --slurpfile o "$dir/atoms.json" --slurpfile n "$dir2/atoms.json" \
     '[$d[0].unchanged[] | . as $u | ($o[0][] | select(.id == $u.old_id)) as $a | ($n[0][] | select(.id == $u.id)) as $b | select($a.file != $b.file or $a.lines != $b.lines)] | length')" 0 "paired atoms have the same file and lines"
 eq "$(jq -r '[.changed[].id] | sort | join(",")' <<<"$d46")" "$(jq -r '[.[] | select(.file == "src/extra.txt" or .file == "src/new.txt" or (.file == "src/app.txt" and .new.start == 1)) | .id] | sort | join(",")' "$dir2/atoms.json")" "the right atoms are the changed ones"
+eq "$(jq -c .removed <<<"$d46")" "[\"$(jq -r '.[] | select(.file == "src/new.txt") | .id' "$dir/atoms.json")\"]" "an old atom the push reworked is listed as removed"
 eq "$("$bin/tour-delta" "$dir2" "$dir2" | jq -c '[(.changed | length), (.unchanged | length)]')" "[0,$new_n]" "same head: nothing changed"
 rc=0; "$bin/tour-delta" "$dir" "$tmp/nope" >/dev/null 2>&1 || rc=$?; eq "$rc" 1 "tour-delta needs both data dirs"
 rc=0; "$bin/tour-delta" "$dir" >/dev/null 2>&1 || rc=$?; eq "$rc" 1 "tour-delta usage"
-cases=$((cases + 14))
+cases=$((cases + 15))
 
 # --- #46 tour-clean: dry run lists, --yes deletes only tours older than the threshold
 croot="$tmp/cleandata"; export CLAUDE_PLUGIN_DATA="$croot"

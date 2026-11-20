@@ -54,7 +54,7 @@ Tests: `bash plugins/tour/tests/run.sh` (needs git and jq; `gh`/`glab` are stubb
 
 ## `/tour:clean [--older-than 30d]`
 
-Prunes the data dir (`${CLAUDE_PLUGIN_DATA:-~/.claude/tour}`), which otherwise grows with every head you tour (a worktree each). **Default threshold: 30 days**, measured from the newest of a tour's `meta.json`, `tour.json` and `state.json`, so a tour you still open stays. It shows what goes (age, size, directory) and the total, asks once, and only then deletes (`tour-clean --yes`): the head directory with its git worktree, and empty parent directories. Nothing newer than the threshold is touched.
+Prunes the data dir (`${CLAUDE_PLUGIN_DATA:-~/.claude/tour}`), which otherwise grows with every head you tour (a worktree each). **Default threshold: 30 days**, measured from the newest of a tour's `meta.json`, `tour.json` and `state.json`, so a tour you keep working in (progress, annotations and drafts update `state.json`) stays; one you only read does not. It shows what goes (age, size, directory) and the total, asks once, and only then deletes (`tour-clean --yes`): the head directory with its git worktree, and empty parent directories. Nothing newer than the threshold is touched.
 
 ## Contract
 

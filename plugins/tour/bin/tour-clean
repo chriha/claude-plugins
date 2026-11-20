@@ -4,7 +4,7 @@
 # Usage:  tour-clean [--older-than <N>d|<N>w] [--yes]      (default: 30d)
 # Data dir: ${CLAUDE_PLUGIN_DATA:-~/.claude/tour} (the one tour-fetch writes). A tour is one head-SHA directory
 # (<host>/<project>/<iid>/<head-sha>/, holds meta.json). Its age is the newest modification time of its meta.json, tour.json and
-# state.json, so a tour you still open or annotate stays. Without --yes nothing is deleted: it lists what would go, one
+# state.json, so a tour you keep working in stays (progress and drafts change state.json). Without --yes nothing is deleted: it lists what would go, one
 # "<age>d <size> <dir>" line per tour, then a "total" line. With --yes it deletes exactly those directories (their git worktree is
 # removed first) and prunes the empty parents. A tour newer than the threshold is never touched.
 #

@@ -97,8 +97,12 @@ dir="${CLAUDE_PLUGIN_DATA:-$HOME/.claude/tour}/$host/$project/$iid/$head_sha"
 
 previous() { # {head_sha, dir} of the newest other head with a tour.json, else null
     local t p="null"
-    t="$(ls -t "${dir%/*}"/*/tour.json 2>/dev/null | grep -vxF "$dir/tour.json" | head -n 1 || true)"
-    if [ -n "$t" ]; then p="$(jq -cn --arg d "${t%/tour.json}" '{head_sha: ($d | split("/") | last), dir: $d}')"; fi
+    # newest by fetch time (meta.json, untouched by regenerating or opening a tour), skipping heads without a tour or atoms
+    for t in $(ls -t "${dir%/*}"/*/meta.json 2>/dev/null || true); do
+        t="${t%/meta.json}"
+        [ "$t" != "$dir" ] && [ -f "$t/tour.json" ] && [ -f "$t/atoms.json" ] || continue
+        p="$(jq -cn --arg d "$t" '{head_sha: ($d | split("/") | last), dir: $d}')"; break
+    done
     printf '%s' "$p"
 }
 emit() { # <meta json> <cached>
