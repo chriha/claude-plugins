@@ -80,12 +80,14 @@ function postArgs(d, atom) {
   const within = (r, n) => isLine(n) && r.count > 0 && n >= r.start && n <= r.start + r.count - 1;
   if (d.kind === 'add') { if (!within(atom.new, d.new_line)) return 'new_line is outside the atom'; return ['--new-line', d.new_line]; }
   if (d.kind === 'del') { if (!within(atom.old, d.old_line)) return 'old_line is outside the atom'; return ['--old-line', d.old_line]; }
-  if (d.kind === 'ctx') { // the UI shows 3 unchanged lines either side: same window, and the old/new offset before or after the hunk
+  if (d.kind === 'ctx') { // the UI shows 3 unchanged lines either side: same window, and an unchanged pair (before the hunk with the before offset, or after it with the after offset)
     if (!isLine(d.old_line) || !isLine(d.new_line)) return 'a context line needs old_line and new_line';
     const first = (r) => (r.count ? r.start : r.start + 1), last = (r) => (r.count ? r.start + r.count - 1 : r.start);
     const near = (r, n) => n >= first(r) - 3 && n <= last(r) + 3;
-    const offsets = [first(atom.old) - first(atom.new), last(atom.old) - last(atom.new)];
-    if (!near(atom.new, d.new_line) || !near(atom.old, d.old_line) || !offsets.includes(d.old_line - d.new_line)) return 'the context line does not belong to the atom';
+    const off = d.old_line - d.new_line;
+    const before = d.old_line < first(atom.old) && d.new_line < first(atom.new) && off === first(atom.old) - first(atom.new);
+    const after = d.old_line > last(atom.old) && d.new_line > last(atom.new) && off === last(atom.old) - last(atom.new);
+    if (!near(atom.new, d.new_line) || !near(atom.old, d.old_line) || !(before || after)) return 'the context line does not belong to the atom';
     return ['--old-line', d.old_line, '--new-line', d.new_line];
   }
   return 'kind must be add, del or ctx';

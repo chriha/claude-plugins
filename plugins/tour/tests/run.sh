@@ -449,6 +449,10 @@ drafts='{"drafts": {
  "none": {"id": "none", "atom": "a4", "kind": "add", "new_line": 1, "body": "rename atom has no lines"},
  "ctx2": {"id": "ctx2", "atom": "a1", "kind": "ctx", "old_line": 40, "new_line": 40, "body": "far"},
  "ctx3": {"id": "ctx3", "atom": "a1", "kind": "ctx", "old_line": 4, "new_line": 5, "body": "offset"},
+ "ctxb": {"id": "ctxb", "atom": "a2", "kind": "ctx", "old_line": 5, "new_line": 5, "body": "before the hunk"},
+ "ctxa": {"id": "ctxa", "atom": "a2", "kind": "ctx", "old_line": 7, "new_line": 8, "body": "after the hunk"},
+ "ctxx": {"id": "ctxx", "atom": "a2", "kind": "ctx", "old_line": 8, "new_line": 8, "body": "new 8 is unchanged but old 8 pairs with new 9"},
+ "ctxi": {"id": "ctxi", "atom": "a2", "kind": "ctx", "old_line": 6, "new_line": 6, "body": "inside the hunk"},
  "slowd": {"id": "slowd", "atom": "a2", "kind": "add", "new_line": 6, "body": "slow"},
  "empty": {"id": "empty", "atom": "a1", "kind": "add", "new_line": 2, "body": " "}}}'
 eq "$(code "${H2[@]}" -X PUT -d "$drafts" "$base2/api/state")" 200 "drafts saved"
@@ -486,12 +490,17 @@ eq "$(code "${H2[@]}" -X POST -d '{"id":"far"}' "$base2/api/comment")" 200 "retr
 # ctx lines must belong to the atom (a1: -2 +2, so old == new); a double click posts once
 eq "$(code "${H2[@]}" -X POST -d '{"id":"ctx2"}' "$base2/api/comment")" 400 "context line far from the atom rejected"
 eq "$(code "${H2[@]}" -X POST -d '{"id":"ctx3"}' "$base2/api/comment")" 400 "context line with a wrong old/new offset rejected"
+# #57 a ctx pair must be an unchanged-line pair: before the hunk (offset before) or after it (offset after), not just a matching offset
+eq "$(code "${H2[@]}" -X POST -d '{"id":"ctxx"}' "$base2/api/comment")" 400 "ctx pair matching the before offset but past the hunk rejected"
+eq "$(code "${H2[@]}" -X POST -d '{"id":"ctxi"}' "$base2/api/comment")" 400 "ctx pair inside the hunk rejected"
+eq "$(code "${H2[@]}" -X POST -d '{"id":"ctxb"}' "$base2/api/comment")" 200 "ctx pair before the hunk accepted"
+eq "$(code "${H2[@]}" -X POST -d '{"id":"ctxa"}' "$base2/api/comment")" 200 "ctx pair after the hunk accepted"
 touch "$FIX/slow"; : > "$STUB_LOG"
 curl -s -o "$tmp/b1" -w '%{http_code}' "${H2[@]}" -X POST -d '{"id":"slowd"}' "$base2/api/comment" > "$tmp/c1" & p1=$!
 sleep 0.3; c2="$(code "${H2[@]}" -X POST -d '{"id":"slowd"}' "$base2/api/comment")"; wait $p1
 eq "$c2" 409 "second click while the first is in flight"; eq "$(cat "$tmp/c1")" 200 "first click posts"
 eq "$(grep -c '^gh api -X POST' "$STUB_LOG")" 1 "double click posts once"; rm "$FIX/slow"
-cases=$((cases + 29))
+cases=$((cases + 33))
 kill "$srv2" 2>/dev/null || true
 
 # --- #45 server: chapter chat runs a read-only `claude -p --resume`, streams it, persists the session, shows CLI errors verbatim
