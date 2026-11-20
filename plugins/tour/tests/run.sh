@@ -15,6 +15,10 @@ cat > "$tmp/stubs/gh" <<'STUB'
 echo "gh $*" >> "$STUB_LOG"
 case "$*" in
     "pr view"*"closingIssuesReferences"*) cat "$FIX/gh-pr.json" ;;   # real gh returns only number/url per closing issue
+    "api -X POST repos/"*"/pulls/"*"/comments"*)   # tour-post (#43)
+        if [ -e "$FIX/post-fail" ]; then echo '{"message": "Validation Failed"}'; echo "gh: Unprocessable Entity (HTTP 422)" >&2; exit 1; fi
+        [ -e "$FIX/slow" ] && sleep 1
+        echo '{"id": 555, "html_url": "https://github.com/acme/app/pull/7#discussion_r555"}' ;;
     "issue view 3 "*"--json title,body"*) echo '{"title": "The ticket", "body": "ticket text"}' ;;
     "issue view"*) echo '{}' ;; *) echo "unexpected gh $*" >&2; exit 1 ;; esac
 STUB
@@ -23,6 +27,7 @@ cat > "$tmp/stubs/glab" <<'STUB'
 echo "glab[$GITLAB_HOST] $*" >> "$STUB_LOG"
 case "$*" in
     api*/closes_issues) cat "$FIX/glab-issues.json" ;;
+    "api -X POST"*discussions*) [ -e "$FIX/post-fail" ] && { echo "glab: 400 Bad request: position is invalid" >&2; exit 1; }; cat > "$FIX/glab-payload.json"; cat "$FIX/glab-disc.json" ;;   # tour-post (#43)
     api*/merge_requests/*) cat "$FIX/glab-mr.json" ;;
     *) echo "unexpected glab $*" >&2; exit 1 ;;
 esac
@@ -125,7 +130,7 @@ printf 'a\nb\n' > f.txt; git add -A && git commit -qm base && git push -q origin
 printf 'a\nB\n' > f.txt
 gl_head="$(pr "$tmp/gl" refs/merge-requests/12/head fix/twelve 'twelve')"
 jq -n --arg sha "$gl_head" '{iid: 12, title: "Twelve", description: "desc", web_url: "https://gitlab.example.com/group/sub/proj/-/merge_requests/12",
-    target_branch: "main", source_branch: "fix/twelve", sha: $sha, diff_refs: {base_sha: "x", head_sha: $sha, start_sha: "x"}}' > "$FIX/glab-mr.json"
+    target_branch: "main", source_branch: "fix/twelve", sha: $sha, diff_refs: {base_sha: "basesha", head_sha: $sha, start_sha: "startsha"}}' > "$FIX/glab-mr.json"
 echo '[{"iid": 5, "title": "GL ticket", "description": "gl text"}]' > "$FIX/glab-issues.json"
 out="$("$bin/tour-fetch" 12)"
 eq "$(jq -r '[.platform, .host, .project, .iid, .title, .description, .cached] | join("|")' <<<"$out")" "gitlab|gitlab.example.com|group/sub/proj|12|Twelve|desc|false" "gl metadata"
@@ -337,5 +342,134 @@ cases=$((cases + 8))
 rc=0; "$bin/tour-serve" "$tmp/nodir" >/dev/null 2>&1 || rc=$?; eq "$rc" 1 "serve without tour.json exits 1"
 cases=$((cases + 1))
 kill "$srv" 2>/dev/null || true
+
+# --- #43 tour-post: inline comment payloads for GitHub and GitLab (stubbed gh/glab)
+mkpd() { # <dir> <mr json>: a data dir whose tour.json carries only the mr
+    mkdir -p "$1"; jq -n --argjson mr "$2" '{version: 1, mr: $mr}' > "$1/tour.json"
+}
+mkpd "$tmp/pd-gh" "$(jq -n --arg s "$gh_head" '{platform: "github", project: "acme/app", iid: 7, url: "https://github.com/acme/app/pull/7", head_sha: $s}')"
+mkpd "$tmp/pd-gl" "$(jq -n --arg s "$gl_head" '{platform: "gitlab", project: "group/sub/proj", iid: 12, url: "https://gitlab.example.com/group/sub/proj/-/merge_requests/12", head_sha: $s}')"
+: > "$STUB_LOG"
+ghcall() { printf 'hello\n' | "$bin/tour-post" "$tmp/pd-gh" "$@"; }
+last() { grep '^gh api -X POST' "$STUB_LOG" | tail -1; }
+eq "$(ghcall --path src/app.txt --new-line 7 | jq -c .)" '{"id":555,"url":"https://github.com/acme/app/pull/7#discussion_r555","inline":true}' "gh post result"
+case "$(last)" in "gh api -X POST repos/acme/app/pulls/7/comments -f body=hello -f commit_id=$gh_head -f path=src/app.txt -F line=7 -f side=RIGHT") ;; *) fail "gh added line: $(last)" ;; esac
+ghcall --path src/app.txt --old-line 6 >/dev/null
+case "$(last)" in *"-f path=src/app.txt -F line=6 -f side=LEFT") ;; *) fail "gh removed line is LEFT: $(last)" ;; esac
+ghcall --path src/edited2.txt --old-path src/edited.txt --old-line 2 --new-line 2 >/dev/null
+case "$(last)" in *"-f path=src/edited2.txt -F line=2 -f side=RIGHT") ;; *) fail "gh renamed file, context line uses the new path: $(last)" ;; esac
+ghcall --path src/edited2.txt --old-path src/edited.txt --old-line 2 >/dev/null
+case "$(last)" in *"-f path=src/edited2.txt -F line=2 -f side=LEFT") ;; *) fail "gh renamed file, removed line uses the new path: $(last)" ;; esac
+touch "$FIX/post-fail"
+rc=0; ghcall --path src/app.txt --new-line 7 > "$tmp/post.out" 2> "$tmp/post.err" || rc=$?
+eq "$rc" 1 "gh refusal exits 1"; eq "$(cat "$tmp/post.out")" "" "gh refusal prints no result"
+grep -Fq 'gh: Unprocessable Entity (HTTP 422)' "$tmp/post.err" || fail "gh error not verbatim: $(cat "$tmp/post.err")"
+rm "$FIX/post-fail"
+rc=0; printf x | "$bin/tour-post" "$tmp/pd-gh" --path f --new-line 0 >/dev/null 2>&1 || rc=$?; eq "$rc" 2 "line 0 is usage"
+rc=0; "$bin/tour-post" "$tmp/pd-gh" --path f </dev/null >/dev/null 2>&1 || rc=$?; eq "$rc" 2 "no line is usage"
+rc=0; printf '  \n' | "$bin/tour-post" "$tmp/pd-gh" --path f --new-line 1 >/dev/null 2>&1 || rc=$?; eq "$rc" 2 "empty comment is usage"
+rc=0; "$bin/tour-post" "$tmp/pd-gh" --path f --new-line "2 3" </dev/null >/dev/null 2>&1 || rc=$?; eq "$rc" 2 "two numbers in one line value is usage"
+rc=0; "$bin/tour-post" "$tmp/pd-gh" --bogus </dev/null >/dev/null 2>&1 || rc=$?; eq "$rc" 2 "unknown option is usage"
+rc=0; "$bin/tour-post" "$tmp/none" --path f --new-line 1 </dev/null >/dev/null 2>&1 || rc=$?; eq "$rc" 2 "no tour.json is usage"
+printf 'from file\n' > "$tmp/body.txt"; ghcall --path src/app.txt --new-line 7 --body-file "$tmp/body.txt" </dev/null >/dev/null
+case "$(last)" in *"-f body=from file "*) ;; *) fail "--body-file: $(last)" ;; esac
+cases=$((cases + 17))
+
+echo '{"id": "d1", "notes": [{"id": 77, "position": {"new_line": 2}}]}' > "$FIX/glab-disc.json"
+glcall() { printf 'hello\n' | "$bin/tour-post" "$tmp/pd-gl" "$@"; }
+pos() { jq -c "[.body, (.position | [.base_sha, .start_sha, .head_sha, .position_type, .old_path, .new_path, .old_line, .new_line])]" "$FIX/glab-payload.json"; }
+eq "$(glcall --path f.txt --new-line 2 | jq -c .)" '{"id":77,"url":"https://gitlab.example.com/group/sub/proj/-/merge_requests/12#note_77","inline":true}' "gl post result"
+eq "$(pos)" "[\"hello\",[\"basesha\",\"startsha\",\"$gl_head\",\"text\",\"f.txt\",\"f.txt\",null,2]]" "gl added line: new_line only"
+glcall --path f.txt --old-line 2 >/dev/null
+eq "$(pos | jq -c '.[1][6:8]')" '[2,null]' "gl removed line: old_line only"
+glcall --path f.txt --old-line 3 --new-line 4 >/dev/null
+eq "$(pos | jq -c '.[1][6:8]')" '[3,4]' "gl context line: both lines"
+glcall --path src/after.txt --old-path src/before.txt --old-line 1 >/dev/null
+eq "$(pos | jq -c '.[1][4:8]')" '["src/before.txt","src/after.txt",1,null]' "gl renamed file: old and new path"
+glcall --path src/app.txt --new-line 7 >/dev/null     # second hunk of a multi-hunk file: absolute line numbers
+eq "$(pos | jq -c '.[1][4:8]')" '["src/app.txt","src/app.txt",null,7]' "gl multi-hunk line"
+glcall --path src/old.txt --old-line 1 >/dev/null
+eq "$(pos | jq -c '.[1][4:8]')" '["src/old.txt","src/old.txt",1,null]' "gl deleted file"
+echo '{"id": "d2", "notes": [{"id": 78, "position": null}]}' > "$FIX/glab-disc.json"
+eq "$(glcall --path f.txt --new-line 2 | jq -c '[.id, .inline]')" '[78,false]' "gl dropped position reported"
+touch "$FIX/post-fail"; rc=0; glcall --path f.txt --new-line 2 > "$tmp/post.out" 2> "$tmp/post.err" || rc=$?
+eq "$rc" 1 "gl refusal exits 1"; eq "$(cat "$tmp/post.out")" "" "gl refusal prints no result"
+eq "$(cat "$tmp/post.err")" "glab: 400 Bad request: position is invalid" "gl error verbatim"; rm "$FIX/post-fail"
+cases=$((cases + 3))
+mkpd "$tmp/pd-gl2" "$(jq -n '{platform: "gitlab", project: "group/sub/proj", iid: 12, url: "https://gitlab.example.com/group/sub/proj/-/merge_requests/12", head_sha: "0000000000000000000000000000000000000000"}')"
+rm -f "$FIX/glab-payload.json"
+rc=0; printf 'x' | "$bin/tour-post" "$tmp/pd-gl2" --path f.txt --new-line 2 >/dev/null 2> "$tmp/post.err" || rc=$?
+eq "$rc" 1 "gl moved head exits 1"; grep -q 'head moved' "$tmp/post.err" || fail "gl moved head message"
+[ ! -e "$FIX/glab-payload.json" ] || fail "nothing is posted when the head moved"
+cases=$((cases + 11))
+
+# --- #43 server: POST /api/comment posts one draft per call, marks it, never twice, keeps it on failure
+cd "$tmp"
+cdata="$tmp/cdata"; mkdir -p "$cdata"
+jq -n --argjson mr "$(jq -c '.mr' "$fx/tour.base.json" | jq --arg s "$gh_head" '.head_sha = $s | .project = "acme/app" | .iid = 7 | .url = "https://github.com/acme/app/pull/7"')" '{version: 1, mr: $mr}' > "$cdata/tour.json"
+cat > "$cdata/atoms.json" <<'JSON'
+{"version": 1, "atoms": [
+ {"id": "a1", "file": "src/app.txt", "old_file": "src/app.txt", "kind": "hunk", "old": {"start": 2, "count": 1}, "new": {"start": 2, "count": 1}, "lines": ["-two", "+TWO"]},
+ {"id": "a2", "file": "src/app.txt", "old_file": "src/app.txt", "kind": "hunk", "old": {"start": 6, "count": 1}, "new": {"start": 6, "count": 2}, "lines": ["-six", "+SIX", "+seven"]},
+ {"id": "a3", "file": "src/edited2.txt", "old_file": "src/edited.txt", "kind": "hunk", "old": {"start": 2, "count": 1}, "new": {"start": 2, "count": 1}, "lines": ["-edit b", "+EDIT b"]},
+ {"id": "a4", "file": "src/after.txt", "old_file": "src/before.txt", "kind": "rename", "old": null, "new": null, "lines": []}
+]}
+JSON
+"$bin/tour-serve" "$cdata" --no-open > "$tmp/serve2.out" 2> "$tmp/serve2.err" &
+srv2=$!; trap 'kill $srv2 2>/dev/null; rm -rf "$tmp"' EXIT
+for _ in $(seq 50); do grep -q '^http' "$tmp/serve2.out" && break; sleep 0.1; done
+url2="$(head -1 "$tmp/serve2.out")"; base2="${url2%%/\?*}"; tok2="${url2##*token=}"; H2=(-H "X-Tour-Token: $tok2")
+drafts='{"drafts": {
+ "add": {"id": "add", "atom": "a2", "kind": "add", "new_line": 7, "body": "second hunk"},
+ "del": {"id": "del", "atom": "a3", "kind": "del", "old_line": 2, "body": "renamed, removed line"},
+ "ctx": {"id": "ctx", "atom": "a1", "kind": "ctx", "old_line": 4, "new_line": 4, "body": "context"},
+ "far": {"id": "far", "atom": "a1", "kind": "add", "new_line": 9, "body": "outside the atom"},
+ "none": {"id": "none", "atom": "a4", "kind": "add", "new_line": 1, "body": "rename atom has no lines"},
+ "ctx2": {"id": "ctx2", "atom": "a1", "kind": "ctx", "old_line": 40, "new_line": 40, "body": "far"},
+ "ctx3": {"id": "ctx3", "atom": "a1", "kind": "ctx", "old_line": 4, "new_line": 5, "body": "offset"},
+ "slowd": {"id": "slowd", "atom": "a2", "kind": "add", "new_line": 6, "body": "slow"},
+ "empty": {"id": "empty", "atom": "a1", "kind": "add", "new_line": 2, "body": " "}}}'
+eq "$(code "${H2[@]}" -X PUT -d "$drafts" "$base2/api/state")" 200 "drafts saved"
+: > "$STUB_LOG"
+eq "$(code "${H2[@]}" -X POST -d '{"id":"add"}' "$base2/api/comment")" 200 "post a draft"
+eq "$(jq -r '.draft.posted.id' "$tmp/body")" 555 "response carries the note id"
+case "$(last)" in "gh api -X POST repos/acme/app/pulls/7/comments -f body=second hunk -f commit_id=$gh_head -f path=src/app.txt -F line=7 -f side=RIGHT") ;; *) fail "server added line: $(last)" ;; esac
+eq "$(jq -r '.drafts.add.posted | [.id, .url] | join(" ")' "$cdata/state.json")" "555 https://github.com/acme/app/pull/7#discussion_r555" "note id saved in state.json"
+eq "$(code "${H2[@]}" -X POST -d '{"id":"add"}' "$base2/api/comment")" 409 "a posted draft cannot be posted twice"
+eq "$(grep -c '^gh api -X POST' "$STUB_LOG")" 1 "exactly one post"
+eq "$(code "${H2[@]}" -X PUT -d '{"drafts": {}}' "$base2/api/state")" 200 "stale state PUT"
+eq "$(jq -r '.drafts.add.posted.id' "$cdata/state.json")" 555 "a stale PUT keeps the note id"
+eq "$(code "${H2[@]}" -X POST -d '{"id":"del"}' "$base2/api/comment")" 404 "draft dropped by the stale PUT is gone"
+code "${H2[@]}" -X PUT -d "$drafts" "$base2/api/state" >/dev/null
+eq "$(code "${H2[@]}" -X POST -d '{"id":"del"}' "$base2/api/comment")" 200 "post a removed line"
+case "$(last)" in *"-f path=src/edited2.txt -F line=2 -f side=LEFT") ;; *) fail "server removed line in a renamed file: $(last)" ;; esac
+eq "$(code "${H2[@]}" -X POST -d '{"id":"ctx"}' "$base2/api/comment")" 200 "post a context line"
+case "$(last)" in *"-f path=src/app.txt -F line=4 -f side=RIGHT") ;; *) fail "server context line: $(last)" ;; esac
+n=$(grep -c '^gh api -X POST' "$STUB_LOG")
+eq "$(code "${H2[@]}" -X POST -d '{"id":"far"}' "$base2/api/comment")" 400 "line outside the atom rejected"
+eq "$(code "${H2[@]}" -X POST -d '{"id":"none"}' "$base2/api/comment")" 400 "atom without lines rejected"
+eq "$(code "${H2[@]}" -X POST -d '{"id":"empty"}' "$base2/api/comment")" 400 "empty comment rejected"
+eq "$(code "${H2[@]}" -X POST -d '{"id":"nope"}' "$base2/api/comment")" 404 "unknown draft"
+eq "$(code -X POST -d '{"id":"far"}' "$base2/api/comment")" 403 "posting needs the token"
+eq "$(grep -c '^gh api -X POST' "$STUB_LOG")" "$n" "rejected drafts post nothing"
+# a failed post keeps the draft, shows the CLI error verbatim, and can be retried
+printf '%s' "$drafts" | jq -c '.drafts.far.new_line = 2 | .drafts.add.body = "again"' > "$tmp/d2.json"
+code "${H2[@]}" -X PUT -d @"$tmp/d2.json" "$base2/api/state" >/dev/null
+touch "$FIX/post-fail"
+eq "$(code "${H2[@]}" -X POST -d '{"id":"far"}' "$base2/api/comment")" 502 "failed post"
+grep -Fq 'gh: Unprocessable Entity (HTTP 422)' "$tmp/body" || fail "error not verbatim: $(cat "$tmp/body")"
+eq "$(jq -r '.drafts.far | [has("posted"), .body] | join(" ")' "$cdata/state.json")" "false outside the atom" "failed post keeps the draft"
+rm "$FIX/post-fail"
+eq "$(code "${H2[@]}" -X POST -d '{"id":"far"}' "$base2/api/comment")" 200 "retry after a failure posts"
+# ctx lines must belong to the atom (a1: -2 +2, so old == new); a double click posts once
+eq "$(code "${H2[@]}" -X POST -d '{"id":"ctx2"}' "$base2/api/comment")" 400 "context line far from the atom rejected"
+eq "$(code "${H2[@]}" -X POST -d '{"id":"ctx3"}' "$base2/api/comment")" 400 "context line with a wrong old/new offset rejected"
+touch "$FIX/slow"; : > "$STUB_LOG"
+curl -s -o "$tmp/b1" -w '%{http_code}' "${H2[@]}" -X POST -d '{"id":"slowd"}' "$base2/api/comment" > "$tmp/c1" & p1=$!
+sleep 0.3; c2="$(code "${H2[@]}" -X POST -d '{"id":"slowd"}' "$base2/api/comment")"; wait $p1
+eq "$c2" 409 "second click while the first is in flight"; eq "$(cat "$tmp/c1")" 200 "first click posts"
+eq "$(grep -c '^gh api -X POST' "$STUB_LOG")" 1 "double click posts once"; rm "$FIX/slow"
+cases=$((cases + 29))
+kill "$srv2" 2>/dev/null || true
 
 echo "tour: $cases cases ok"
