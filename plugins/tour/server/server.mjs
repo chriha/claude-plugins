@@ -30,6 +30,10 @@ const token = crypto.randomBytes(16).toString('hex');
 const statePath = path.join(dataDir, 'state.json');
 const postBin = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'tour-post');
 const postedMem = new Map(); // draft id -> posted, kept in memory too: a failed state.json write must not allow a second post
+const claudeBin = process.env.TOUR_CLAUDE_BIN || 'claude'; // the CLI login is used: no API key; the override exists for tests
+const chatDir = path.join(dataDir, 'chat');
+const READ_ONLY_TOOLS = 'Read,Grep,Glob'; // the chat can look at the code, never change it or run commands
+const chatting = new Set(); // chapter ids with a chat turn in flight
 const posting = new Set(); // draft ids with a post in flight: a double click never posts twice
 
 function tokenOk(t) {
@@ -125,6 +129,74 @@ async function postComment(res, body) {
   child.stdin.end(d.body);
 }
 
+// --- chat: one `claude -p --resume` session per chapter, read-only tools, cwd = the MR worktree
+const chapterById = (id) => {
+  try {
+    const t = JSON.parse(fs.readFileSync(path.join(dataDir, 'tour.json'), 'utf8'));
+    return [...(t.chapters ?? []), ...(t.mechanical?.atoms?.length ? [{ id: 'mechanical', title: 'Mechanical changes', blocks: [{ what: t.mechanical.note ?? '', atoms: t.mechanical.atoms }] }] : [])].find((c) => c.id === id);
+  } catch { return null; }
+};
+const chatFile = (id) => path.join(chatDir, id.replace(/[^A-Za-z0-9_-]/g, '_') + '.json');
+const readChat = (id) => { try { return JSON.parse(fs.readFileSync(chatFile(id), 'utf8')); } catch { return { session: null, messages: [] }; } };
+const writeChat = (id, chat) => { fs.mkdirSync(chatDir, { recursive: true }); fs.writeFileSync(chatFile(id) + '.tmp', JSON.stringify(chat)); fs.renameSync(chatFile(id) + '.tmp', chatFile(id)); };
+
+// The first message of a chapter carries the chapter and its atoms; later turns resume the session and send the question alone.
+function chapterContext(ch) {
+  const byId = new Map(readAtoms().map((a) => [a.id, a]));
+  const parts = [`You are helping a reviewer understand one chapter of a merge request tour. Answer questions about this chapter; the checkout in your working directory is the MR head and is read-only to you.`, `Chapter: ${ch.title}${ch.order_reason ? ` (${ch.order_reason})` : ''}`];
+  for (const b of ch.blocks) {
+    parts.push(`- ${b.what}${b.why ? ` Why: ${b.why}` : ''}`);
+    for (const id of b.atoms ?? []) { const a = byId.get(id); if (a) parts.push(`  ${a.file} @@ -${a.old?.start ?? ''} +${a.new?.start ?? ''}\n${(a.lines ?? []).join('\n')}`.slice(0, 4000)); }
+  }
+  return parts.join('\n');
+}
+
+// Streams SSE: {type:'text',text} | {type:'error',error} | {type:'done'}. An error is the CLI's own output, verbatim; nothing is retried.
+async function chat(req, res, body) {
+  let msg;
+  try { msg = JSON.parse(body); } catch { return fail(res, 400, 'body must be JSON {"chapter": "<id>", "message": "<text>"}'); }
+  const ch = typeof msg.chapter === 'string' && chapterById(msg.chapter);
+  if (!ch) return fail(res, 404, 'no such chapter');
+  if (typeof msg.message !== 'string' || !msg.message.trim()) return fail(res, 400, 'the message is empty');
+  if (chatting.has(ch.id)) return fail(res, 409, 'a reply for this chapter is already streaming');
+  const chatState = readChat(ch.id);
+  const session = /^[0-9A-Za-z-]{8,64}$/.test(chatState.session ?? '') ? chatState.session : null;
+  const cargs = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--tools', READ_ONLY_TOOLS, '--allowedTools', READ_ONLY_TOOLS, ...(session ? ['--resume', session] : [])];
+  const prior = chatState.session; // a failed turn may not have seen the chapter context: keep only a session an earlier success stored
+  chatting.add(ch.id);
+  res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+  const emit = (o) => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(o)}\n\n`); };
+  let reply = '', gotDelta = false, errText = '', stderr = '', buf = '', finished = false;
+  const child = spawn(claudeBin, cargs, { cwd: fs.existsSync(worktree) ? worktree : dataDir, stdio: ['pipe', 'pipe', 'pipe'] });
+  const text = (t) => { reply += t; emit({ type: 'text', text: t }); };
+  const line = (l) => {
+    let e; try { e = JSON.parse(l); } catch { return; }
+    if (typeof e.session_id === 'string' && /^[0-9A-Za-z-]{8,64}$/.test(e.session_id)) chatState.session = e.session_id;
+    if (e.type === 'stream_event' && e.event?.delta?.type === 'text_delta') { gotDelta = true; text(e.event.delta.text); }
+    else if (e.type === 'result') {
+      if (e.is_error) errText = String(e.result ?? 'the claude CLI reported an error');
+      else if (!gotDelta && typeof e.result === 'string') text(e.result);
+    }
+  };
+  child.stdout.on('data', (c) => { buf += c; let i; while ((i = buf.indexOf('\n')) >= 0) { line(buf.slice(0, i)); buf = buf.slice(i + 1); } });
+  child.stderr.on('data', (c) => { if (stderr.length < 8192) stderr += c; });
+  const finish = (code, spawnErr) => {
+    if (finished) return; finished = true;
+    chatting.delete(ch.id);
+    if (buf.trim()) line(buf);
+    const err = spawnErr ? `could not run ${claudeBin}: ${spawnErr.message}` : errText || (code ? (stderr.trim() || `${claudeBin} exited with code ${code}`) : '');
+    const messages = [...chatState.messages, { role: 'user', text: msg.message }, ...(reply ? [{ role: 'assistant', text: reply }] : []), ...(err ? [{ role: 'error', text: err }] : [])];
+    try { writeChat(ch.id, { session: (err ? prior : chatState.session) ?? null, messages }); } catch {}
+    emit(err ? { type: 'error', error: err } : { type: 'done' });
+    res.end();
+  };
+  child.on('error', (e) => finish(null, e));
+  child.on('close', (code) => finish(code));
+  res.on('close', () => { if (!finished) child.kill(); });
+  child.stdin.on('error', () => {});
+  child.stdin.end(session ? msg.message : `${chapterContext(ch)}\n\nQuestion: ${msg.message}`);
+}
+
 async function api(req, res, url) {
   const route = `${req.method} ${url.pathname}`;
   if (route === 'GET /api/tour') return sendFile(res, path.join(dataDir, 'tour.json'), 'application/json');
@@ -142,6 +214,12 @@ async function api(req, res, url) {
     return send(res, 200, '{"ok":true}');
   }
   if (route === 'POST /api/comment') return postComment(res, await readBody(req).catch(() => ''));
+  if (route === 'GET /api/chat') {
+    const id = url.searchParams.get('chapter');
+    if (!id || !chapterById(id)) return fail(res, 404, 'no such chapter');
+    return send(res, 200, JSON.stringify({ messages: readChat(id).messages }));
+  }
+  if (route === 'POST /api/chat') return chat(req, res, await readBody(req).catch(() => ''));
   if (route === 'GET /api/file') {
     const file = worktreeFile(url.searchParams.get('path'));
     if (!file) return fail(res, 404, 'no such file in the worktree');
