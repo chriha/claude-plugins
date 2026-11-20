@@ -7,7 +7,8 @@
 # Platform: from the URL, else from the origin host (github.com → gh, anything else → glab); TOUR_PLATFORM=gh|glab overrides.
 # Writes  ${CLAUDE_PLUGIN_DATA:-~/.claude/tour}/<host>/<project-path>/<iid>/<head-sha>/  (outside the repo):
 #   meta.json (title, refs, shas, ticket, paths) · worktree/ (detached at the head SHA) · diff.patch · atoms.json
-# Prints meta.json plus "cached" on stdout. cached=true when tour.json already exists for that head SHA: then nothing
+# Prints meta.json plus "cached" and "previous" on stdout. previous = {head_sha, dir} of the newest other head of this MR/PR that
+# already has a tour.json (the base for tour-delta), else null. cached=true when tour.json already exists for that head SHA: then nothing
 # is fetched from git and nothing is rewritten. --no-open is accepted for the caller (fetch never opens anything).
 # Atoms: one per `git diff -U0` hunk (id a1, a2, … in diff order); a file without hunks (pure rename, binary,
 # mode-only, empty add/delete) gets one atom with kind rename|binary|mode|add|delete, so every changed file is covered.
@@ -94,8 +95,19 @@ printf '%s' "$head_sha" | grep -Eq '^[0-9a-f]{40,64}$' || die "no valid head sha
 
 dir="${CLAUDE_PLUGIN_DATA:-$HOME/.claude/tour}/$host/$project/$iid/$head_sha"
 
+previous() { # {head_sha, dir} of the newest other head with a tour.json, else null
+    local t p="null"
+    # newest by fetch time (meta.json, untouched by regenerating or opening a tour), skipping heads without a tour or atoms
+    for t in $(ls -t "${dir%/*}"/*/meta.json 2>/dev/null || true); do
+        t="${t%/meta.json}"
+        [ "$t" != "$dir" ] && [ -f "$t/tour.json" ] && [ -f "$t/atoms.json" ] || continue
+        p="$(jq -cn --arg d "$t" '{head_sha: ($d | split("/") | last), dir: $d}')"; break
+    done
+    printf '%s' "$p"
+}
 emit() { # <meta json> <cached>
-    printf '%s' "$1" | jq --argjson cached "$2" --argjson no_open "$no_open" '. + {cached: $cached, no_open: $no_open}'
+    printf '%s' "$1" | jq --argjson cached "$2" --argjson no_open "$no_open" --argjson previous "$(previous)" \
+        '. + {cached: $cached, no_open: $no_open, previous: $previous}'
 }
 
 # --- cache hit: report it, touch nothing

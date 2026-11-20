@@ -17,16 +17,25 @@ No id/URL: say `usage: /tour:review <id|url> [--regenerate] [--no-open]` and sto
 ## 1. Fetch
 
 1. Run `${CLAUDE_PLUGIN_ROOT}/bin/tour-fetch <id|url> [--no-open]`. It prints the meta (`dir`, `worktree`, `atoms_file`,
-   `atom_count`, `title`, `description`, `ticket`, `base_sha`, `head_sha`, `cached`). A failure (no `gh`/`glab`, bad id) is
+   `atom_count`, `title`, `description`, `ticket`, `base_sha`, `head_sha`, `cached`, `previous`). A failure (no `gh`/`glab`, bad id) is
    shown to the user as is; stop.
 2. `--regenerate` set and `cached: true`: delete `<dir>/tour.json` and `<dir>/state.json` (nothing else) and run tour-fetch
    again, so it fetches fresh.
 3. `cached: true` (and no `--regenerate`): **do not generate.** Go straight to step 7 (zero tokens) and say it is the cached tour
    for head `<head_sha short>`.
+4. `cached: false`, `previous` not null and no `--regenerate`: this MR/PR was toured before at another head (a push since).
+   Ask once with `AskUserQuestion`: **New tour** (a full tour of the current head) or **Delta tour since `<previous.head_sha short>`**
+   (only what changed since that head). New tour: continue with step 2 as usual. Delta tour: run
+   `${CLAUDE_PLUGIN_ROOT}/bin/tour-delta <previous.dir> <dir>` (prints and writes `<dir>/delta.json`: `unchanged` atoms paired with
+   their old ids, `changed` atoms marked `new` or `changed`) and generate a delta tour (step 4, "Delta tour"). `changed` is empty:
+   say the diff is the same as the previous tour's (only line positions moved), serve the previous tour
+   (`tour-serve <previous.dir> --worktree <previous.dir>/worktree`, step 7), tell the user it belongs to the older head
+   `<previous.head_sha short>` (annotations and posts go there; a post fails once the head moved) and stop. `previous` null: nothing to ask.
 
 ## 2. Size and estimate
 
-Read `<dir>/atoms.json` and `<dir>/diff.patch`. Changed lines = lines starting with `+` or `-` in `atoms[].lines`. Diff tokens
+Read `<dir>/atoms.json` and `<dir>/diff.patch` (delta tour: only the atoms listed in `changed`; `unchanged` atoms are not read and
+not counted). Changed lines = lines starting with `+` or `-` in `atoms[].lines`. Diff tokens
 = `diff.patch` bytes / 4.
 
 | Layer | Default | Extra tokens (factor x diff tokens) |
@@ -68,6 +77,16 @@ code at the head, and `tour-drift <dir>` output for `drift`.
 - `arch` chosen: `graph.mermaid`, before/after of the modules the change touches.
 - `rules` chosen (the UI shows each flag on its block): read the repo's `CLAUDE.md` and `.claude/rules/*` (in the worktree), add `rules_flags` to blocks that break a
   rule, quoting the rule and its source file; no flag when nothing is broken.
+- **Delta tour** (chosen in step 1): chapters cover only the `changed` atoms of `<dir>/delta.json`; read and explain nothing else.
+  Put every `unchanged` atom in `mechanical.atoms` with `mechanical.note`
+  `Unchanged since <previous.head_sha short>: see the earlier tour (<previous.dir>/tour.json)`. When the previous tour is itself a delta
+  tour, an atom paired with one of its `mechanical` atoms points on to the tour that note names (join the references with `; `), so
+  the reference always leads to the tour that explains it. They are not re-explained, read or
+  looked up, so they cost no tokens. A `changed` atom of a file the old head touched (`status: changed`) is a new version of
+  something the earlier tour explained: say what is different now, not the whole story again. `delta.json` `removed` lists old atoms the push dropped or reworked: name them in `summary.approach`
+  (the earlier tour still describes them). Set `summary.intent` and `approach` for
+  the push (what it changes), and add to `summary.risk_reasons` only reasons that come from the delta. Layers, drift and
+  validation work as in a full tour; `tour-drift` still runs over the whole MR.
 - **Big MR (changed lines > 2000):** group atoms by top-level directory (split a huge directory by subdirectory), generate the
   chapters of each batch separately with only that batch's atoms, then merge: join chapters that belong together, re-apply
   the reading order across batches, write `summary` once from all of them, and re-check coverage.
