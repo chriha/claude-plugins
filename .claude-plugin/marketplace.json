@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "chriha",
-  "description": "Christopher Hartmann's Claude Code plugins: ticket pipeline and project setup wizard.",
+  "description": "Christopher Hartmann's Claude Code plugins: ticket pipeline, project setup wizard and guided MR/PR review.",
   "owner": { "name": "Christopher Hartmann" },
   "plugins": [
     {
@@ -14,6 +14,12 @@
       "name": "project",
       "description": "/project:setup interviews you and writes PROJECT_PLAN.md; /project:update plans the gaps of an existing project; /project:build executes it.",
       "source": "./plugins/project",
+      "category": "productivity"
+    },
+    {
+      "name": "tour",
+      "description": "Guided MR/PR review: /tour:review groups a change into chapters, explains each and opens a local web UI (in development).",
+      "source": "./plugins/tour",
       "category": "productivity"
     }
   ]

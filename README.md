@@ -6,12 +6,14 @@ Christopher Hartmann's Claude Code plugins, one marketplace (`chriha`).
 /plugin marketplace add chriha/claude-plugins
 /plugin install harness@chriha
 /plugin install project@chriha
+/plugin install tour@chriha
 ```
 
 | Plugin | What it does | Docs |
 |---|---|---|
 | `harness` | Ticket → plan → implement → review pipeline for any repo, forge and tracker (`/harness:*`) | [plugins/harness](plugins/harness/README.md) |
 | `project` | Interview-driven project setup: `/project:setup`, `/project:update`, `/project:build` | [plugins/project](plugins/project/README.md) |
+| `tour` | Guided MR/PR review: `/tour:review`, `/tour:clean` (in development) | [plugins/tour](plugins/tour/README.md) |
 
 Update with `/plugin marketplace update chriha`, then `claude plugin update <name>`.
 
