@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "atoms": [
+    {"id": "a1", "file": "app/Http/Requests/ImportRequest.php", "old": {"start": 18, "count": 1}, "new": {"start": 18, "count": 4},
+     "lines": ["-            'rows' => ['array'],", "+            'rows' => ['required', 'array', 'min:1'],", "+            'rows.*.sku' => ['required', 'string'],", "+            'rows.*.qty' => ['required', 'integer', 'min:1'],"]},
+    {"id": "a2", "file": "app/Http/Controllers/ImportController.php", "old": {"start": 22, "count": 3}, "new": {"start": 22, "count": 5},
+     "lines": ["-        $this->service->run($request->input('rows'));", "-        return response()->noContent();", "+        $result = $this->service->run($request->validated('rows'));", "+", "+        return response()->json(['imported' => $result->imported, 'skipped' => $result->skipped], 201);"]},
+    {"id": "a3", "file": "app/Services/ImportService.php", "old": {"start": 31, "count": 2}, "new": {"start": 31, "count": 9},
+     "lines": ["-    public function run(array $rows): void", "-    {", "+    public function run(array $rows): ImportResult", "+    {", "+        if (count($rows) > config('import.max_rows')) {", "+            throw new TooManyRowsException(count($rows));", "+        }", "+", "+        $imported = 0;", "+        $skipped = 0;"]},
+    {"id": "a4", "file": "app/Services/ImportService.php", "old": {"start": 48, "count": 4}, "new": {"start": 55, "count": 9},
+     "lines": ["-        foreach ($rows as $row) {", "-            Row::create($row);", "-        }", "+        foreach ($rows as $row) {", "+            if (Row::where('sku', $row['sku'])->exists()) {", "+                $skipped++;", "+                continue;", "+            }", "+            Row::create($row);", "+            $imported++;", "+        }", "+", "+        return new ImportResult($imported, $skipped);"]},
+    {"id": "a5", "file": "routes/api.php", "old": {"start": 40, "count": 0}, "new": {"start": 41, "count": 1},
+     "lines": ["+Route::post('/imports', ImportController::class)->middleware('throttle:imports');"]},
+    {"id": "a6", "file": "config/import.php", "old": {"start": 0, "count": 0}, "new": {"start": 1, "count": 5},
+     "lines": ["+<?php", "+", "+return [", "+    'max_rows' => env('IMPORT_MAX_ROWS', 5000),", "+];"]},
+    {"id": "a7", "file": "tests/Feature/ImportTest.php", "old": {"start": 0, "count": 0}, "new": {"start": 1, "count": 12},
+     "lines": ["+it('rejects an empty rows payload', function () {", "+    $this->postJson('/api/imports', ['rows' => []])->assertStatus(422);", "+});", "+", "+it('skips rows whose sku already exists', function () {", "+    Row::factory()->create(['sku' => 'A-1']);", "+", "+    $this->postJson('/api/imports', ['rows' => [['sku' => 'A-1', 'qty' => 1], ['sku' => 'B-2', 'qty' => 2]]])", "+        ->assertCreated()", "+        ->assertJson(['imported' => 1, 'skipped' => 1]);", "+});", "+"]},
+    {"id": "a8", "file": "composer.json", "old": {"start": 12, "count": 0}, "new": {"start": 13, "count": 1},
+     "lines": ["+        \"brick/math\": \"^0.12\","]},
+    {"id": "a9", "file": "composer.lock", "old": {"start": 210, "count": 2}, "new": {"start": 210, "count": 48},
+     "lines": ["-    \"content-hash\": \"3f1c0e4a\",", "+    \"content-hash\": \"9b7d2a61\",", "+    ... (46 more lines: brick/math 0.12.1 package entry)"]},
+    {"id": "a10", "file": "app/Models/Row.php", "old": {"start": 9, "count": 2}, "new": {"start": 9, "count": 2},
+     "lines": ["-    protected $fillable = ['sku','qty'];", "+    protected $fillable = ['sku', 'qty'];"]}
+  ]
+}

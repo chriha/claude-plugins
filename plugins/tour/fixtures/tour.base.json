@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "mr": {
+    "platform": "github",
+    "project": "acme/shop-api",
+    "iid": 88,
+    "title": "Reject empty import payloads and skip duplicate SKUs",
+    "url": "https://github.com/acme/shop-api/pull/88",
+    "base_sha": "1f0c2d9a7b3e4c5d6e7f8091a2b3c4d5e6f70811",
+    "head_sha": "8a9b0c1d2e3f405162738495a6b7c8d9e0f1a2b3"
+  },
+  "layers": ["base"],
+  "summary": {
+    "intent": "Make POST /api/imports reject empty or malformed payloads and stop creating duplicate rows for an existing SKU.",
+    "approach": "Validation moves into ImportRequest and ImportService returns imported/skipped counts.",
+    "risk": "low",
+    "risk_reasons": []
+  },
+  "chapters": [
+    {
+      "id": "c1",
+      "title": "Validation and response",
+      "order_reason": "Contract first.",
+      "blocks": [
+        {
+          "atoms": ["a1", "a2"],
+          "what": "ImportRequest requires a non-empty rows array with sku and qty per row; the controller answers 201 with counts.",
+          "why": "The PR description asks for empty payloads to be rejected.",
+          "why_source": "mr",
+          "impact": [
+            {"symbol": "ImportController::__invoke", "file": "app/Http/Controllers/ImportController.php", "note": "Status changes from 204 to 201."}
+          ],
+          "watch": []
+        }
+      ]
+    },
+    {
+      "id": "c2",
+      "title": "Import logic and wiring",
+      "order_reason": "Domain, then wiring and tests.",
+      "blocks": [
+        {
+          "atoms": ["a3", "a4"],
+          "what": "run() returns an ImportResult, enforces a row cap and skips existing SKUs.",
+          "why": "Unclear: the PR does not say why the cap was added.",
+          "why_source": "unclear",
+          "impact": [
+            {"symbol": "ImportService::run", "file": "app/Services/ImportService.php", "note": "Return type changed from void."}
+          ],
+          "watch": ["Per-row exists() query."]
+        },
+        {
+          "atoms": ["a5", "a6", "a7", "a8"],
+          "what": "Route throttle, max_rows config key, two feature tests and a brick/math dependency.",
+          "why": "Supports the import changes; the dependency is not used anywhere in the diff.",
+          "why_source": "code",
+          "impact": [],
+          "watch": ["brick/math looks unused."]
+        }
+      ]
+    }
+  ],
+  "mechanical": {
+    "atoms": ["a9", "a10"],
+    "note": "composer.lock and a whitespace-only change."
+  }
+}

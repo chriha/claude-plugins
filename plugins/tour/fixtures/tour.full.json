@@ -1,0 +1,158 @@
+{
+  "version": 1,
+  "mr": {
+    "platform": "gitlab",
+    "project": "acme/shop-api",
+    "iid": 1234,
+    "title": "Reject empty import payloads and skip duplicate SKUs",
+    "url": "https://gitlab.example.com/acme/shop-api/-/merge_requests/1234",
+    "base_sha": "1f0c2d9a7b3e4c5d6e7f8091a2b3c4d5e6f70811",
+    "head_sha": "8a9b0c1d2e3f405162738495a6b7c8d9e0f1a2b3",
+    "ticket": {"id": "SHOP-1370", "summary": "Imports with an empty rows array return 204 and silently do nothing; duplicate SKUs create duplicate rows."}
+  },
+  "layers": ["base", "deep", "active", "arch", "rules", "drift"],
+  "summary": {
+    "intent": "Make POST /api/imports reject empty or malformed payloads and stop creating duplicate rows for an existing SKU.",
+    "approach": "Validation moves into ImportRequest, ImportService returns an ImportResult with imported/skipped counts, and the row cap comes from a new config key. The route gets a throttle.",
+    "risk": "medium",
+    "risk_reasons": [
+      "The endpoint now answers 201 with a JSON body instead of 204, which existing clients may not expect.",
+      "Duplicate detection is a per-row query (N+1) and is not atomic under concurrent imports."
+    ]
+  },
+  "drift": [
+    {"kind": "new_dependency", "detail": "brick/math ^0.12", "atoms": ["a8"]},
+    {"kind": "new_config_key", "detail": "import.max_rows (env IMPORT_MAX_ROWS)", "atoms": ["a6"]},
+    {"kind": "changed_route", "detail": "POST /imports gains throttle:imports", "atoms": ["a5"]}
+  ],
+  "graph": {
+    "mermaid": "graph LR\n  R[routes/api.php POST /imports] --> C[ImportController]\n  C --> Q[ImportRequest]\n  C --> S[ImportService::run]\n  S --> M[Row model]\n  S -. new .-> CFG[config import.max_rows]\n  S -. new .-> X[TooManyRowsException]"
+  },
+  "chapters": [
+    {
+      "id": "c1",
+      "title": "Validate the import payload",
+      "order_reason": "Contract first: what the endpoint accepts and returns, before the logic behind it.",
+      "intent": "The request class starts rejecting empty and malformed payloads, and the controller reports what happened.",
+      "blocks": [
+        {
+          "atoms": ["a1"],
+          "what": "ImportRequest now requires a non-empty rows array, and each row needs a string sku and an integer qty of at least 1.",
+          "why": "SHOP-1370: an empty rows array was accepted and silently did nothing.",
+          "why_source": "ticket",
+          "impact": [
+            {"symbol": "ImportRequest::rules", "file": "app/Http/Requests/ImportRequest.php", "note": "Payloads that passed before (empty rows, missing qty) now return 422.",
+             "callers": [{"symbol": "ImportController::__invoke", "file": "app/Http/Controllers/ImportController.php"}]}
+          ],
+          "watch": ["Check that no client sends qty as a numeric string; 'integer' rejects \"3\" only in strict mode."],
+          "rules_flags": []
+        },
+        {
+          "atoms": ["a2"],
+          "what": "The controller passes validated rows to the service and answers 201 with the imported/skipped counts instead of 204.",
+          "why": "The MR description says callers need to know how many rows were skipped.",
+          "why_source": "mr",
+          "impact": [
+            {"symbol": "ImportController::__invoke", "file": "app/Http/Controllers/ImportController.php", "note": "Response status and body change; any client checking for 204 breaks.",
+             "callers": []}
+          ],
+          "watch": ["Response contract change is not mentioned in the ticket."],
+          "rules_flags": [
+            {"rule": "API changes need a changelog entry", "source": "CLAUDE.md", "note": "No CHANGELOG.md change in this MR."}
+          ]
+        }
+      ],
+      "probes": [
+        {"question": "What happens if a row has a valid sku but qty is 0?", "snippet": "it('rejects qty 0', function () {\n    $this->postJson('/api/imports', ['rows' => [['sku' => 'A-1', 'qty' => 0]]])->assertStatus(422);\n});"}
+      ]
+    },
+    {
+      "id": "c2",
+      "title": "Import logic: cap and duplicate skipping",
+      "order_reason": "Domain next: the behaviour the contract promised.",
+      "intent": "The service enforces a row cap and skips SKUs that already exist, returning counts.",
+      "blocks": [
+        {
+          "atoms": ["a3"],
+          "what": "run() now returns an ImportResult and throws TooManyRowsException above import.max_rows.",
+          "why": "Unclear: neither the ticket nor the MR explains why a cap was added.",
+          "why_source": "unclear",
+          "impact": [
+            {"symbol": "ImportService::run", "file": "app/Services/ImportService.php", "note": "Return type changed from void to ImportResult.",
+             "callers": [{"symbol": "ImportController::__invoke", "file": "app/Http/Controllers/ImportController.php"}, {"symbol": "ReimportCommand::handle", "file": "app/Console/Commands/ReimportCommand.php"}]}
+          ],
+          "watch": ["ReimportCommand also calls run() and is not in this diff; check it still works with the new exception."],
+          "rules_flags": []
+        },
+        {
+          "atoms": ["a4"],
+          "what": "Each row is checked against existing SKUs; existing ones are counted as skipped, new ones are created.",
+          "why": "SHOP-1370 asks to stop creating duplicate rows.",
+          "why_source": "ticket",
+          "impact": [
+            {"symbol": "Row::where", "file": "app/Models/Row.php", "note": "One query per row; 5000 rows means 5000 extra queries.",
+             "callers": []}
+          ],
+          "watch": ["Two concurrent imports can both pass the exists() check and create a duplicate. No unique index is added."],
+          "rules_flags": []
+        }
+      ],
+      "probes": [
+        {"question": "What if the same sku appears twice inside one payload?", "snippet": "it('skips an in-payload duplicate', function () {\n    $r = $this->postJson('/api/imports', ['rows' => [['sku' => 'A', 'qty' => 1], ['sku' => 'A', 'qty' => 1]]]);\n    $r->assertJson(['imported' => 1, 'skipped' => 1]);\n});"},
+        {"question": "What if the payload has exactly max_rows rows?", "snippet": "it('accepts max_rows rows', function () {\n    config(['import.max_rows' => 2]);\n    $this->postJson('/api/imports', ['rows' => [['sku' => 'A', 'qty' => 1], ['sku' => 'B', 'qty' => 1]]])->assertCreated();\n});"}
+      ]
+    },
+    {
+      "id": "c3",
+      "title": "Wiring: route, config, dependency",
+      "order_reason": "Wiring after the logic it connects.",
+      "intent": "The route is throttled, the cap becomes configurable and a math library is added.",
+      "blocks": [
+        {
+          "atoms": ["a5", "a6"],
+          "what": "POST /imports gets the throttle:imports middleware, and config/import.php defines max_rows (default 5000, env IMPORT_MAX_ROWS).",
+          "why": "The row cap needs a config home; the throttle limiter 'imports' is not defined in this diff.",
+          "why_source": "code",
+          "impact": [
+            {"symbol": "throttle:imports", "file": "app/Providers/RouteServiceProvider.php", "note": "Limiter must exist, otherwise the route throws at runtime.",
+             "callers": []}
+          ],
+          "watch": ["Search for RateLimiter::for('imports') before approving."],
+          "rules_flags": []
+        },
+        {
+          "atoms": ["a8"],
+          "what": "composer.json requires brick/math ^0.12.",
+          "why": "Unclear: no code in this MR uses brick/math.",
+          "why_source": "unclear",
+          "impact": [],
+          "watch": ["An unused dependency; ask the author."],
+          "rules_flags": []
+        }
+      ],
+      "probes": []
+    },
+    {
+      "id": "c4",
+      "title": "Tests",
+      "order_reason": "Tests last: they confirm the behaviour described above.",
+      "intent": "Two feature tests pin the 422 on empty payloads and the skip-duplicate counts.",
+      "blocks": [
+        {
+          "atoms": ["a7"],
+          "what": "Adds a test for the empty-rows 422 and one for skipping an existing SKU.",
+          "why": "Covers the two behaviours from SHOP-1370.",
+          "why_source": "ticket",
+          "impact": [],
+          "watch": ["No test for the row cap or the in-payload duplicate."],
+          "rules_flags": []
+        }
+      ],
+      "probes": []
+    }
+  ],
+  "mechanical": {
+    "atoms": ["a9", "a10"],
+    "note": "composer.lock regeneration for brick/math and a whitespace-only change to Row::$fillable."
+  }
+}

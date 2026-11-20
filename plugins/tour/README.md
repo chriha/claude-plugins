@@ -9,3 +9,7 @@ explain each one, and open a local web UI. The goal is that the reviewer underst
 Planned skills: `/tour:review` (model `opus`), `/tour:clean` (model `haiku`).
 
 The plugin stands alone: it does not need `harness`; shared code is copied into `bin/`.
+
+## Contract
+
+`references/tour-schema.md` defines `tour.json`. `bin/tour-validate <tour.json> <atoms.json>` checks it (needs `jq`), including that every diff atom is assigned exactly once. `fixtures/` holds valid example tours for UI work. Tests: `bash plugins/tour/tests/run.sh`.
