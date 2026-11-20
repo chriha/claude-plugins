@@ -336,7 +336,7 @@ eq "$(code "${H[@]}" "$base/api/tour")" 200 "tour served"
 eq "$(jq -r .mr.iid "$tmp/body")" 1234 "tour body"
 eq "$(code "${H[@]}" "$base/api/atoms")" 200 "atoms served"
 eq "$(jq '.atoms | length' "$tmp/body")" 10 "atoms body"
-cases=$((cases + 11))
+cases=$((cases + 10))
 
 eq "$(code "${H[@]}" "$base/api/state")" 200 "state GET (none yet)"; eq "$(cat "$tmp/body")" '{}' "empty state"
 eq "$(code "${H[@]}" -X PUT -d '{"understood":{"c1/0":true},"pos":{"chapter":"c1","block":0}}' "$base/api/state")" 200 "state PUT"
@@ -423,7 +423,7 @@ rm -f "$FIX/glab-payload.json"
 rc=0; printf 'x' | "$bin/tour-post" "$tmp/pd-gl2" --path f.txt --new-line 2 >/dev/null 2> "$tmp/post.err" || rc=$?
 eq "$rc" 1 "gl moved head exits 1"; grep -q 'head moved' "$tmp/post.err" || fail "gl moved head message"
 [ ! -e "$FIX/glab-payload.json" ] || fail "nothing is posted when the head moved"
-cases=$((cases + 11))
+cases=$((cases + 10))
 
 # --- #43 server: POST /api/comment posts one draft per call, marks it, never twice, keeps it on failure
 cd "$tmp"
@@ -558,5 +558,66 @@ eq "$(chat "$ch" ' ')" 400 "empty message"
 eq "$(code -X POST -d '{}' "$base3/api/chat")" 403 "chat needs the token"
 cases=$((cases + 21))
 kill "$srv3" 2>/dev/null || true
+
+# --- #46 tour-fetch reports the previous head's tour; tour-delta diffs atoms across heads
+(cd "$tmp/gh" && git checkout -q feature/seven &&
+ printf 'zero\none\nTWO\nthree\nfour\nfive\nSIX\nseven\n' > src/app.txt        # two old hunks shift down by one, one new hunk on top
+ printf 'newer\n' > src/new.txt; printf 'extra\n' > src/extra.txt            # one changed atom, one new file
+ git add -A && git commit -qm 'seven again' && git push -q origin HEAD:refs/pull/7/head && git checkout -q main)
+gh_head2="$(git -C "$tmp/gh" rev-parse feature/seven)"
+jq --arg sha "$gh_head2" '.headRefOid = $sha' "$FIX/gh-pr.json" > "$FIX/gh-pr2.json" && mv "$FIX/gh-pr2.json" "$FIX/gh-pr.json"
+echo '{}' > "$dir/tour.json"                                                    # head 1 has a tour
+cd "$tmp/gh"
+out2="$("$bin/tour-fetch" 7)"
+dir2="$(jq -r .dir <<<"$out2")"
+eq "$(jq -r '[.cached, .head_sha] | join(" ")' <<<"$out2")" "false $gh_head2" "second head fetched fresh"
+eq "$(jq -c .previous <<<"$out2")" "{\"head_sha\":\"$gh_head\",\"dir\":\"$dir\"}" "previous = the older head with a tour"
+eq "$(jq -c .previous <<<"$out")" null "no previous tour on the first fetch"
+rm "$dir/tour.json"
+eq "$("$bin/tour-fetch" 7 | jq -c .previous)" null "a head without a tour is not a previous tour"
+echo '{}' > "$dir/tour.json"
+
+d46="$("$bin/tour-delta" "$dir" "$dir2")"
+[ -f "$dir2/delta.json" ] || fail "tour-delta writes delta.json beside the new atoms"
+eq "$(jq -c . "$dir2/delta.json")" "$(jq -c . <<<"$d46")" "delta.json is what is printed"
+eq "$(jq -r '[.since, .head] | join(" ")' <<<"$d46")" "$gh_head $gh_head2" "delta heads"
+old_n="$(jq 'length' "$dir/atoms.json")"; new_n="$(jq 'length' "$dir2/atoms.json")"
+eq "$(jq -r '.total' <<<"$d46")" "$new_n" "delta total"
+eq "$(jq -r '.changed | map(.status) | sort | join(",")' <<<"$d46")" "changed,changed,new" "changed atoms: new hunk, edited file, new file"
+eq "$(jq -r '.unchanged | length' <<<"$d46")" "$((old_n - 1))" "every old atom but the edited file's is unchanged (shifted hunks, rename, binary, mode, delete too)"
+eq "$(jq -r '(.unchanged | length) + (.changed | length)' <<<"$d46")" "$new_n" "unchanged + changed cover every new atom"
+eq "$(jq -rn --slurpfile d "$dir2/delta.json" --slurpfile o "$dir/atoms.json" --slurpfile n "$dir2/atoms.json" \
+    '[$d[0].unchanged[] | . as $u | ($o[0][] | select(.id == $u.old_id)) as $a | ($n[0][] | select(.id == $u.id)) as $b | select($a.file != $b.file or $a.lines != $b.lines)] | length')" 0 "paired atoms have the same file and lines"
+eq "$(jq -r '[.changed[].id] | sort | join(",")' <<<"$d46")" "$(jq -r '[.[] | select(.file == "src/extra.txt" or .file == "src/new.txt" or (.file == "src/app.txt" and .new.start == 1)) | .id] | sort | join(",")' "$dir2/atoms.json")" "the right atoms are the changed ones"
+eq "$("$bin/tour-delta" "$dir2" "$dir2" | jq -c '[(.changed | length), (.unchanged | length)]')" "[0,$new_n]" "same head: nothing changed"
+rc=0; "$bin/tour-delta" "$dir" "$tmp/nope" >/dev/null 2>&1 || rc=$?; eq "$rc" 1 "tour-delta needs both data dirs"
+rc=0; "$bin/tour-delta" "$dir" >/dev/null 2>&1 || rc=$?; eq "$rc" 1 "tour-delta usage"
+cases=$((cases + 14))
+
+# --- #46 tour-clean: dry run lists, --yes deletes only tours older than the threshold
+croot="$tmp/cleandata"; export CLAUDE_PLUGIN_DATA="$croot"
+mk() { mkdir -p "$croot/$1"; echo '{}' > "$croot/$1/meta.json"; echo '{}' > "$croot/$1/tour.json"; }
+old_time() { touch -t 202001010000 "$croot/$1"/*.json; }
+mk github.com/acme/app/1/aaa; old_time github.com/acme/app/1/aaa                # old
+mk github.com/acme/app/2/bbb                                                    # recent
+mk github.com/acme/app/3/ccc; old_time github.com/acme/app/3/ccc; touch "$croot/github.com/acme/app/3/ccc/state.json"   # old tour, opened lately
+mk gitlab.example.com/g/sub/proj/4/ddd; old_time gitlab.example.com/g/sub/proj/4/ddd   # old, only tour of its project
+git -C "$tmp/gh" worktree add -q --detach "$croot/github.com/acme/app/1/aaa/worktree" main
+cout="$("$bin/tour-clean")"
+eq "$(grep -c '^[0-9]*d ' <<<"$cout")" 2 "dry run lists the two stale tours"
+grep -q 'aaa$' <<<"$cout" && grep -q 'ddd$' <<<"$cout" || fail "dry run names the stale tours"
+grep -q '/bbb$\|/ccc$' <<<"$cout" && fail "dry run lists a recent or lately opened tour"
+grep -q 'dry run' <<<"$cout" || fail "dry run says so"
+[ -d "$croot/github.com/acme/app/1/aaa" ] || fail "dry run must not delete"
+cout="$("$bin/tour-clean" --older-than 3650d)"; eq "$(grep -c '^[0-9]*d ' <<<"$cout")" 0 "10 years: nothing is old enough"
+"$bin/tour-clean" --older-than 4w --yes >/dev/null
+[ ! -d "$croot/github.com/acme/app/1/aaa" ] && [ ! -d "$croot/github.com/acme/app/1" ] || fail "stale tour and its empty parent removed"
+[ ! -d "$croot/gitlab.example.com" ] || fail "empty project dirs pruned up to the data dir"
+[ -f "$croot/github.com/acme/app/2/bbb/tour.json" ] && [ -f "$croot/github.com/acme/app/3/ccc/tour.json" ] || fail "recent tours stay"
+git -C "$tmp/gh" worktree list | grep -q aaa && fail "the stale tour's git worktree is unregistered"
+rc=0; "$bin/tour-clean" --older-than abc >/dev/null 2>&1 || rc=$?; eq "$rc" 1 "bad --older-than"
+rc=0; "$bin/tour-clean" --bogus >/dev/null 2>&1 || rc=$?; eq "$rc" 1 "tour-clean usage"
+cases=$((cases + 10))
+export CLAUDE_PLUGIN_DATA="$tmp/data"
 
 echo "tour: $cases cases ok"

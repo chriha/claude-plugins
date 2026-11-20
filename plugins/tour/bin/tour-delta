@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+#
+# Atom diff between two heads of the same MR/PR. Deterministic, costs no tokens.
+# Usage:  tour-delta <old-data-dir> <new-data-dir>     (both as written by tour-fetch: atoms.json and meta.json; needs jq)
+# An atom of the new head is "unchanged" when the old head has an atom with the same file and the same changed lines; the hunk
+# position (old/new start) is ignored, so a push that only shifts lines (an insert above, a rebase) changes nothing. Equal atoms
+# pair up one to one, in diff order. Every other atom is "changed" (the file had no matching atom before it: status "changed" when
+# the old head touched the file, else "new"). Atoms without hunks (rename, binary, mode, add, delete) match on kind, old and new path
+# and mode.
+# Writes <new-data-dir>/delta.json and prints it:
+#   {"since": "<old head sha>", "head": "<new head sha>", "total": N,
+#    "unchanged": [{"id": "<new atom>", "old_id": "<old atom>"}], "changed": [{"id": "<new atom>", "status": "new|changed"}]}
+#
+set -euo pipefail
+
+die() { echo "tour-delta: $*" >&2; exit 1; }
+command -v jq >/dev/null || die "jq is required"
+[ $# -eq 2 ] || die "usage: tour-delta <old-data-dir> <new-data-dir>"
+old="$1"; new="$2"
+for d in "$old" "$new"; do
+    [ -f "$d/atoms.json" ] && [ -f "$d/meta.json" ] || die "$d needs atoms.json and meta.json (run tour-fetch first)"
+done
+
+jq -n --slurpfile oa "$old/atoms.json" --slurpfile na "$new/atoms.json" \
+      --slurpfile om "$old/meta.json" --slurpfile nm "$new/meta.json" '
+  def arr: if type == "array" then . else .atoms end;
+  def key: [.file, (.kind // "hunk"), (.lines | join("\n")),
+            (if (.kind // "hunk") == "hunk" then null else [.old_file, (.mode | tostring)] end)] | @json;
+  ($oa[0] | arr) as $olds | ($na[0] | arr) as $news
+  | ($olds | map(.file, .old_file) | map(select(. != null)) | unique) as $oldfiles
+  | (reduce $olds[] as $a ({}; .[$a | key] += [$a.id])) as $pool
+  | (reduce $news[] as $a ({pool: $pool, unchanged: [], changed: []};
+        ($a | key) as $k
+        | if ((.pool[$k] // []) | length) > 0
+          then .unchanged += [{id: $a.id, old_id: .pool[$k][0]}] | .pool[$k] |= .[1:]
+          else .changed += [{id: $a.id, status: (if ($oldfiles | index($a.file)) != null then "changed" else "new" end)}] end)) as $r
+  | {since: $om[0].head_sha, head: $nm[0].head_sha, total: ($news | length), unchanged: $r.unchanged, changed: $r.changed}
+' > "$new/delta.json.tmp" || { rm -f "$new/delta.json.tmp"; die "could not read the atoms"; }
+mv "$new/delta.json.tmp" "$new/delta.json"
+cat "$new/delta.json"

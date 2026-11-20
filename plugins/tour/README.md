@@ -1,12 +1,12 @@
 # tour
 
-Status: in development. `/tour:review` works; `/tour:clean` is not written yet.
+Status: in development. `/tour:review` and `/tour:clean` work.
 
 Guided review of a GitLab or GitHub MR/PR, human or AI authored. `/tour:review <id|url>` groups the change into chapters,
 explain each one, and open a local web UI. The goal is that the reviewer understands the change. It is not a bug hunter
 (`/harness:review` and `/code-review` do that), never runs automatically and never posts comments without an explicit click.
 
-Skills: `/tour:review` (model `opus`), `/tour:clean` (model `haiku`, planned).
+Skills: `/tour:review` (model `opus`), `/tour:clean` (model `haiku`).
 
 The plugin stands alone: it does not need `harness`; shared code is copied into `bin/`.
 
@@ -14,7 +14,7 @@ The plugin stands alone: it does not need `harness`; shared code is copied into 
 
 You start it; nothing triggers it (no push, schedule or HEAD hook). It runs in your own Claude Code session, so it uses that session's auth.
 
-1. `tour-fetch` fetches the change (GitHub via `gh`, GitLab via `glab`). When a tour for the same head SHA is already cached, the UI opens right away and **no tokens are spent**. `--regenerate` drops the cached `tour.json` and builds a new one. `--no-open` skips the browser and prints the `tour-serve` command instead.
+1. `tour-fetch` fetches the change (GitHub via `gh`, GitLab via `glab`). When a tour for the same head SHA is already cached, the UI opens right away and **no tokens are spent**. `--regenerate` drops the cached `tour.json` and builds a new one. After a push (a new head SHA for a PR you toured before) it asks **New tour** or **Delta tour since `<old sha>`**, see "Delta tour" below. `--no-open` skips the browser and prints the `tour-serve` command instead.
 2. It shows diff stats and a token estimate (heuristic: diff tokens x layer factor, as small/medium/large plus a number) per layer.
 3. **Cost gate** (`AskUserQuestion`): you pick the optional layers before any tokens go into them. Base (chapters, reading order, what/why/impact) is always on, and drift flags are always included because they are deterministic and free.
 
@@ -37,14 +37,24 @@ You start it; nothing triggers it (no push, schedule or HEAD hook). It runs in y
    | Rules check | flags per block, quoting the rule and its source file | reading `CLAUDE.md` and `.claude/rules/*` once, then checking each block against them |
 4. It writes `tour.json`, runs `tour-validate` and repairs what it lists (at most 2 repair rounds), then starts `tour-serve`.
 
-Changes above about 2000 changed lines are generated in batches by directory and merged; above 10000 it suggests splitting the MR. Reading order and wording rules live in `references/writing-guide.md`; the eval cases are in `evals/` (`review-cost-gate-fix-loop`, `review-active-layer`).
+Changes above about 2000 changed lines are generated in batches by directory and merged; above 10000 it suggests splitting the MR. Reading order and wording rules live in `references/writing-guide.md`; the eval cases are in `evals/` (`review-cost-gate-fix-loop`, `review-active-layer`, `review-delta-tour`).
 
 ## Helpers (`bin/`)
 
 - `tour-fetch <id|url> [--no-open]`: detects the platform (`gh` or `glab`), fetches the MR/PR metadata and head ref, creates a detached worktree at the head SHA and writes `meta.json`, `diff.patch` and `atoms.json` (one atom per `git diff -U0` hunk) to `${CLAUDE_PLUGIN_DATA:-~/.claude/tour}/<host>/<project-path>/<iid>/<head-sha>/`. Reports `cached: true` when `tour.json` already exists for that head SHA.
 - `tour-drift <data-dir>`: deterministic drift flags (new dependency, new migration, changed route/config/env keys, new top-level dir) as the `drift` array of the tour schema. No tokens.
+- `tour-delta <old-data-dir> <new-data-dir>`: atom diff between two heads of the same MR/PR. An atom of the new head is unchanged when the old head has one with the same file and the same changed lines (hunk positions are ignored, so a push that only shifts lines changes nothing); all others are `changed` (the file was touched before) or `new`. Writes and prints `<new-data-dir>/delta.json`. No tokens.
+- `tour-clean [--older-than <N>d|<N>w] [--yes]`: lists, and with `--yes` deletes, tours whose `meta.json`, `tour.json` and `state.json` are all older than the threshold (default 30d), with their git worktrees. Without `--yes` it deletes nothing.
 
 Tests: `bash plugins/tour/tests/run.sh` (needs git and jq; `gh`/`glab` are stubbed, no network; the server cases also need node and curl).
+
+## Delta tour (after a push)
+
+`tour-fetch` reports `previous`: the newest other head of the same MR/PR that already has a `tour.json`. When it is set (and no `--regenerate`), `/tour:review` offers a **New tour** or a **Delta tour since `<old sha>`**. The delta tour runs `tour-delta`, then writes chapters for the changed atoms only. Every unchanged atom is listed in `mechanical` with the note "Unchanged since `<old sha>`: see the earlier tour", is not re-explained and spends no tokens; the schema is unchanged and `tour-validate` still checks coverage. If no atom changed (only line positions moved), the previous tour is opened instead.
+
+## `/tour:clean [--older-than 30d]`
+
+Prunes the data dir (`${CLAUDE_PLUGIN_DATA:-~/.claude/tour}`), which otherwise grows with every head you tour (a worktree each). **Default threshold: 30 days**, measured from the newest of a tour's `meta.json`, `tour.json` and `state.json`, so a tour you still open stays. It shows what goes (age, size, directory) and the total, asks once, and only then deletes (`tour-clean --yes`): the head directory with its git worktree, and empty parent directories. Nothing newer than the threshold is touched.
 
 ## Contract
 

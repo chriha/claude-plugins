@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+#
+# Prune old tour data. Deterministic, costs no tokens.
+# Usage:  tour-clean [--older-than <N>d|<N>w] [--yes]      (default: 30d)
+# Data dir: ${CLAUDE_PLUGIN_DATA:-~/.claude/tour} (the one tour-fetch writes). A tour is one head-SHA directory
+# (<host>/<project>/<iid>/<head-sha>/, holds meta.json). Its age is the newest modification time of its meta.json, tour.json and
+# state.json, so a tour you still open or annotate stays. Without --yes nothing is deleted: it lists what would go, one
+# "<age>d <size> <dir>" line per tour, then a "total" line. With --yes it deletes exactly those directories (their git worktree is
+# removed first) and prunes the empty parents. A tour newer than the threshold is never touched.
+#
+set -euo pipefail
+
+die() { echo "tour-clean: $*" >&2; exit 1; }
+
+older="30d" yes=false
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --older-than) [ $# -ge 2 ] || die "--older-than needs a value like 30d"; older="$2"; shift 2 ;;
+        --yes) yes=true; shift ;;
+        *) die "usage: tour-clean [--older-than <N>d|<N>w] [--yes]" ;;
+    esac
+done
+case "$older" in
+    [0-9]*d) n="${older%d}"; mult=1 ;;
+    [0-9]*w) n="${older%w}"; mult=7 ;;
+    *) die "bad --older-than '$older' (use 30d or 4w)" ;;
+esac
+case "$n" in *[!0-9]*) die "bad --older-than '$older' (use 30d or 4w)" ;; esac
+mins=$((n * mult * 1440))
+
+root="${CLAUDE_PLUGIN_DATA:-$HOME/.claude/tour}"
+[ -d "$root" ] || { echo "tour-clean: nothing to clean ($root does not exist)"; exit 0; }
+
+count=0 total_kb=0
+while IFS= read -r meta; do
+    d="${meta%/meta.json}"
+    # recent = any of the three files touched within the threshold
+    [ -z "$(find "$d" -maxdepth 1 -type f \( -name meta.json -o -name tour.json -o -name state.json \) -mmin "-$mins" -print -quit)" ] || continue
+    newest="$(find "$d" -maxdepth 1 -type f \( -name meta.json -o -name tour.json -o -name state.json \) -exec stat -c %Y {} + 2>/dev/null \
+        || find "$d" -maxdepth 1 -type f \( -name meta.json -o -name tour.json -o -name state.json \) -exec stat -f %m {} +)"
+    newest="$(printf '%s\n' "$newest" | sort -n | tail -n 1)"
+    age=$((($(date +%s) - newest) / 86400))
+    kb="$(du -sk "$d" | awk '{print $1}')"
+    printf '%sd %sK %s\n' "$age" "$kb" "$d"
+    count=$((count + 1)); total_kb=$((total_kb + kb))
+    $yes || continue
+    if [ -d "$d/worktree" ]; then
+        common="$(git -C "$d/worktree" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+        if [ -n "$common" ]; then git --git-dir="$common" worktree remove --force "$d/worktree" 2>/dev/null || true; fi
+    fi
+    rm -rf "$d"
+    p="${d%/*}"
+    while [ "$p" != "$root" ] && [ -d "$p" ] && rmdir "$p" 2>/dev/null; do p="${p%/*}"; done
+done < <(find "$root" -type f -name meta.json -not -path '*/worktree/*' | sort)
+
+if $yes; then echo "total: removed $count tour(s), ${total_kb}K"; else echo "total: $count tour(s) older than $older, ${total_kb}K (dry run: pass --yes to delete)"; fi

@@ -1,0 +1,63 @@
+schema_version: "1.1"
+name: review-delta-tour
+description: >
+  /tour:review after a push: the MR was toured at an old head (data/old) and fetched again (data/new, `previous` set), and the
+  user chose "Delta tour". The skill must run tour-delta, explain only the changed atoms (a new file and an edited hunk), park every
+  unchanged atom in `mechanical` with the "Unchanged since" note instead of re-explaining it, and finish valid under tour-validate.
+  Guards skills/review/SKILL.md (step 1.4 and the Delta tour paragraph of step 4) and bin/tour-delta. Needs --scaffold,
+  --ablation none and --allow-tools Bash Write Edit.
+tags: [tour, skills, delta, validate]
+runs: 3
+context:
+  scaffold_script: scaffold.sh
+execution:
+  model: sonnet
+  max_turns: 40
+  timeout_seconds: 900
+  allowed_tools: [Bash, Read, Write, Edit, Glob, Grep]
+  prompt: |
+    You are running the /tour:review skill. Read its SKILL.md (find the plugin's `skills/review/SKILL.md` and
+    `references/writing-guide.md` next to this repo's tour plugin) and follow it. State so far: `tour-fetch` ran for the new head
+    and its output is `data/new/meta.json` (its `previous` points to `data/old`, the tour of the old head, `data/old/tour.json`);
+    the "New tour or Delta tour" question was asked and the user chose "Delta tour" (do not call AskUserQuestion, the answer is
+    final); at the cost gate the user chose no optional layer. The MR worktrees are not available, so explain from the atoms.
+    Write `data/new/tour.json`, run `bin/tour-validate` on it and repair what it lists. Do not start `tour-serve`. Reply with the
+    one-paragraph report from step 6.
+graders:
+  - name: delta-computed
+    type: tool_used
+    tool: Bash
+    input_match: 'tour-delta'
+    min: 1
+    arm: both
+  - name: tour-written
+    type: regex
+    target: {source: file, path: data/new/tour.json}
+    pattern: '"chapters"\s*:'
+  - name: new-file-explained
+    type: regex
+    target: {source: file, path: data/new/tour.json}
+    pattern: 'AuditLog'
+  - name: unchanged-parked
+    type: regex
+    target: {source: file, path: data/new/tour.json}
+    pattern: 'Unchanged since 1111111'
+  - name: no-optional-fields
+    type: regex
+    target: {source: file, path: data/new/tour.json}
+    pattern: '"(graph|rules_flags|callers|intent|probes)"\s*:'
+    match: not_contains
+  - name: validator-run
+    type: tool_used
+    tool: Bash
+    input_match: 'tour-validate'
+    min: 1
+    max: 5
+    arm: both
+  - name: no-serve
+    type: tool_used
+    tool: Bash
+    input_match: 'tour-serve'
+    min: 0
+    max: 0
+    arm: both
