@@ -1,4 +1,4 @@
-// tour UI: vanilla JS, no build step. Nothing is posted without a click on "Post". Contract: references/tour-schema.md. Tour data is only ever set via
+// tour UI: vanilla JS, no build step. Optional layers (deep, active, arch, rules) render only when listed in tour.layers. Nothing is posted without a click on "Post". Contract: references/tour-schema.md. Tour data is only ever set via
 // textContent (never innerHTML); the one innerHTML is highlight.js output, which escapes its input.
 const CTX = 3; // real file lines shown around each atom
 const CDN = {
@@ -78,6 +78,10 @@ function drawer() {
 
 const chapters = () => [...tour.chapters, ...(tour.mechanical?.atoms?.length
   ? [{ id: 'mechanical', title: 'Mechanical', order_reason: tour.mechanical.note, blocks: [{ atoms: tour.mechanical.atoms, what: tour.mechanical.note, why: '', why_source: 'code', impact: [], watch: [] }] }] : [])];
+const has = (layer) => !!tour.layers?.includes(layer);
+// Active review: an atom counts as anticipated when the reviewer's prediction names its file path, file name or file stem.
+const anticipated = (a, text) => { const t = text.toLowerCase(), f = a.file.toLowerCase(), name = f.split('/').pop(), stem = name.replace(/\.[^.]*$/, ''); return t.includes(f) || t.includes(name) || (stem.length > 2 && t.includes(stem)); };
+const surprise = (ch, a) => { const p = S.predictions[ch.id]; return !!(p?.revealed && p.text.trim() && !anticipated(a, p.text)); };
 const key = (ch, i) => `${ch.id}/${i}`;
 const doneCount = (ch) => ch.blocks.filter((_, i) => S.understood[key(ch, i)]).length;
 
@@ -114,9 +118,10 @@ function atomRows(a, lines) {
   return { before, dels, adds, after };
 }
 
-function atomView(a) {
-  const box = h('div', { class: 'code', id: 'atom-' + a.id }, h('div', { class: 'file' }, h('a', { href: '#/f/' + encodeURIComponent(a.file) }, a.file),
-    h('span', { class: 'muted' }, ` ${a.id} · -${a.old.start},${a.old.count} +${a.new.start},${a.new.count}${a.kind ? ' · ' + a.kind : ''}`)));
+function atomView(a, ch) {
+  const sur = ch && surprise(ch, a);
+  const box = h('div', { class: 'code' + (sur ? ' surprise' : ''), id: 'atom-' + a.id }, h('div', { class: 'file' }, h('a', { href: '#/f/' + encodeURIComponent(a.file) }, a.file),
+    h('span', { class: 'muted' }, ` ${a.id} · -${a.old.start},${a.old.count} +${a.new.start},${a.new.count}${a.kind ? ' · ' + a.kind : ''} `), sur && h('span', { class: 'badge warn' }, 'not predicted')));
   fileLines(a.file).then((lines) => {
     const { before, dels, adds, after } = atomRows(a, lines);
     const num = (v, r) => (v == null || !r || !r.k ? h('span', { class: 'n' }, v ?? '')
@@ -148,14 +153,14 @@ const theme = () => { if (S.theme) document.documentElement.dataset.theme = S.th
 function landing() {
   const { mr, summary } = tour, all = chapters();
   const total = all.reduce((n, c) => n + c.blocks.length, 0), done = all.reduce((n, c) => n + doneCount(c), 0);
-  const graph = tour.graph?.mermaid && h('pre', { class: 'mermaid' }, tour.graph.mermaid);
+  const graph = has('arch') && tour.graph?.mermaid && h('pre', { class: 'mermaid' }, tour.graph.mermaid);
   show($main, 
     h('h1', {}, mr.title),
     h('p', { class: 'muted' }, h('a', { href: mr.url, target: '_blank', rel: 'noopener noreferrer' }, `${mr.project} #${mr.iid}`), ` · head ${mr.head_sha.slice(0, 8)}`,
       mr.ticket && ` · ${mr.ticket.id}: ${mr.ticket.summary}`),
     h('div', { class: 'card' }, h('p', {}, h('b', {}, 'Intent. '), summary.intent), h('p', {}, h('b', {}, 'Approach. '), summary.approach),
       h('p', {}, h('b', {}, 'Risk: '), h('span', { class: 'risk-' + summary.risk }, summary.risk)), h('ul', { class: 'plain' }, summary.risk_reasons.map((r) => h('li', {}, '• ' + r)))),
-    tour.drift?.length && h('div', { class: 'card' }, h('b', {}, 'Drift flags'), h('ul', { class: 'plain' }, tour.drift.map((d) => h('li', {}, h('span', { class: 'badge warn' }, d.kind), ' ' + d.detail)))),
+    has('drift') && tour.drift?.length > 0 && h('div', { class: 'card' }, h('b', {}, 'Drift flags'), h('ul', { class: 'plain' }, tour.drift.map((d) => h('li', {}, h('span', { class: 'badge warn' }, d.kind), ' ' + d.detail)))),
     graph && h('div', { class: 'card' }, h('b', {}, 'Architecture'), graph),
     h('h2', {}, `Chapters (${done}/${total} understood)`),
     all.map((c, i) => h('div', { class: 'chapter-row' }, h('span', { class: 'muted' }, i + 1),
@@ -175,17 +180,35 @@ function chapterView(id) {
       h('div', { class: 'narr' },
         h('p', { class: 'what' }, h('b', {}, b.what)),
         b.why && h('p', {}, b.why, ' ', h('span', { class: 'badge ' + (b.why_source === 'unclear' ? 'warn' : '') }, b.why_source === 'unclear' ? 'unclear why: ask the author' : 'source: ' + b.why_source)),
-        b.impact.length > 0 && h('ul', { class: 'plain' }, b.impact.map((m) => h('li', {}, h('a', { href: '#/f/' + encodeURIComponent(m.file) }, m.symbol), ' ' + m.note))),
+        b.impact.length > 0 && h('ul', { class: 'plain' }, b.impact.map((m) => h('li', {}, h('a', { href: '#/f/' + encodeURIComponent(m.file) }, m.symbol), ' ' + m.note,
+          has('deep') && m.callers?.length > 0 && h('ul', { class: 'plain callers' }, h('li', { class: 'muted' }, 'callers / dependents:'), m.callers.map((c) => h('li', {}, '↳ ', h('a', { href: '#/f/' + encodeURIComponent(c.file) }, c.symbol))))))),
+        has('rules') && b.rules_flags?.length > 0 && h('ul', { class: 'plain rules' }, b.rules_flags.map((r) => h('li', { class: 'bad' }, '§ ', h('b', {}, r.rule), ` (${r.source}): ${r.note}`))),
         b.watch.length > 0 && h('ul', { class: 'plain' }, b.watch.map((w) => h('li', { class: 'warn' }, '⚠ ' + w))),
         h('button', { onclick: () => { cur = i; mark(); } }, 'understood (u)')),
-      h('div', { class: 'ctx' }, b.atoms.map((aid) => (atoms[aid] ? atomView(atoms[aid]) : h('p', { class: 'bad' }, 'atom ' + aid + ' missing from atoms.json')))));
+      h('div', { class: 'ctx' }, b.atoms.map((aid) => (atoms[aid] ? atomView(atoms[aid], ch) : h('p', { class: 'bad' }, 'atom ' + aid + ' missing from atoms.json')))));
     return el;
   });
   const nav = (c, label) => (c ? h('a', { href: '#/c/' + c.id }, label) : h('span', { class: 'muted' }, label));
-  const body = ch.id === 'mechanical' ? h('details', {}, h('summary', {}, 'Show mechanical changes'), blocks) : blocks;
+  const active = has('active') && typeof ch.intent === 'string', pred = S.predictions[ch.id], gated = active && !pred?.revealed;
+  const body = gated ? null : ch.id === 'mechanical' ? h('details', {}, h('summary', {}, 'Show mechanical changes'), blocks) : blocks;
   show($main, h('p', {}, h('a', { href: '#/' }, 'Overview'), ' · ', nav(all[idx - 1], '← previous (p)'), ' · ', nav(all[idx + 1], 'next (n) →')),
-    h('h1', {}, `${idx + 1}. ${ch.title}`), h('p', { class: 'muted' }, ch.order_reason), body);
+    h('h1', {}, `${idx + 1}. ${ch.title}`), h('p', { class: 'muted' }, ch.order_reason),
+    active && (gated ? gate(ch) : revealed(ch)), body);
   paint();
+}
+// Active review: teaser and prediction box, then reveal. The prediction only goes to state.json via the local server.
+function gate(ch) {
+  const box = h('textarea', { rows: '4', placeholder: 'What do you expect to change, and where?', 'aria-label': 'Your prediction' });
+  box.value = S.predictions[ch.id]?.text ?? '';
+  box.addEventListener('input', () => { S.predictions[ch.id] = { text: box.value, revealed: false }; save(); });
+  return h('div', { class: 'card gate' }, h('p', {}, h('b', {}, 'Before you look: '), ch.intent), h('p', { class: 'muted' }, 'What do you expect to change, and where? Predictions stay on this machine (state.json).'), box,
+    h('p', {}, h('button', { onclick: () => { S.predictions[ch.id] = { text: box.value, revealed: true }; save(); route(true); } }, 'Reveal the change')));
+}
+function revealed(ch) {
+  const p = S.predictions[ch.id], probes = ch.probes ?? [];
+  return h('div', { class: 'card' }, p?.text.trim() ? h('p', {}, h('b', {}, 'Your prediction: '), p.text) : h('p', { class: 'muted' }, 'You skipped the prediction.'),
+    p?.text.trim() && h('p', { class: 'muted' }, 'Changes your prediction did not name are marked "not predicted".'),
+    probes.length > 0 && h('div', { class: 'probes' }, h('b', {}, 'Break it: '), probes.map((q) => h('div', {}, h('p', {}, q.question), h('pre', { class: 'snippet' }, q.snippet)))));
 }
 function paint(scroll = false) {
   document.querySelectorAll('.block').forEach((el) => {
@@ -234,7 +257,7 @@ try {
   let raw;
   [tour, raw, S] = await Promise.all([getJSON('/api/tour'), getJSON('/api/atoms'), getJSON('/api/state')]);
   atoms = Object.fromEntries((Array.isArray(raw) ? raw : raw.atoms ?? []).map((a) => [a.id, a]));
-  S = { understood: {}, mode: 'unified', ...S, drafts: S.drafts ?? {} }; theme(); route();
+  S = { understood: {}, predictions: {}, mode: 'unified', ...S, drafts: S.drafts ?? {} }; theme(); route();
   loadScript(CDN.hljs).then(() => route(true)).catch(() => {}); // highlight when it arrives; the tour reads fine without it
 } catch (e) {
   show($main, h('p', { class: 'bad' }, 'Could not load the tour: ' + e.message));

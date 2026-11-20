@@ -320,6 +320,12 @@ eq "$(code "${H[@]}" "$base/api/state")" 200 "state GET (none yet)"; eq "$(cat "
 eq "$(code "${H[@]}" -X PUT -d '{"understood":{"c1/0":true},"pos":{"chapter":"c1","block":0}}' "$base/api/state")" 200 "state PUT"
 eq "$(code "${H[@]}" "$base/api/state")" 200 "state GET"; eq "$(jq -r '.understood["c1/0"]' "$tmp/body")" true "state persisted"
 eq "$(jq -r '.pos.chapter' "$data/state.json")" c1 "state.json written beside tour.json"
+# --- #44 active-review predictions live only in state.json, and the UI never sends them off the machine
+eq "$(code "${H[@]}" -X PUT -d '{"predictions":{"c1":{"text":"ImportRequest rules","revealed":true}}}' "$base/api/state")" 200 "predictions PUT"
+eq "$(jq -r '.predictions.c1.text' "$data/state.json")" "ImportRequest rules" "predictions persisted in state.json"
+eq "$(grep -c 'fetch(' "$bin/../ui/app.js")" "$(grep 'fetch(' "$bin/../ui/app.js" | grep -vc "https\?://")" "every fetch in app.js is same-origin"
+eq "$(grep -c "predictions" "$bin/../server/server.mjs")" 0 "server has no special handling that could forward predictions"
+cases=$((cases + 4))
 eq "$(code "${H[@]}" -X PUT -d '[1]' "$base/api/state")" 400 "state PUT rejects non-object"
 eq "$(code "${H[@]}" -X PUT -d 'not json' "$base/api/state")" 400 "state PUT rejects invalid JSON"
 eq "$(code -X PUT -d '{}' "$base/api/state")" 403 "state PUT needs the token"

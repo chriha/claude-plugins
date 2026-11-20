@@ -29,6 +29,10 @@ main { max-width:1400px; margin:0 auto; padding:16px; }
 ul.plain { list-style:none; padding:0; margin:4px 0; }
 pre.mermaid { overflow:auto; }
 @media (max-width:800px) { .block { grid-template-columns:1fr; } .row.split { font-size:11px; } }
+.code.surprise { border-color:var(--warn); box-shadow:inset 3px 0 0 var(--warn); }
+textarea { width:100%; font:inherit; color:var(--fg); background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:6px; }
+pre.snippet { font:12.5px/1.45 ui-monospace, Menlo, monospace; background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:8px; overflow:auto; }
+ul.callers { margin-left:12px; }
 .n.cm { cursor:pointer; } .n.cm:hover { color:var(--accent); text-decoration:underline; } .n.drafted { color:var(--warn); font-weight:bold; }
 .drawer { position:fixed; top:0; right:0; bottom:0; width:min(420px,100vw); overflow:auto; background:var(--panel); border-left:1px solid var(--line); padding:12px 16px; z-index:3; }
 .draft { border-top:1px solid var(--line); padding:8px 0; } .draft textarea { width:100%; font:inherit; color:var(--fg); background:var(--bg); border:1px solid var(--line); border-radius:6px; }

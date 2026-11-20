@@ -25,10 +25,19 @@ You start it; nothing triggers it (no push, schedule or HEAD hook). It runs in y
    | Architecture delta | off | before/after graph as Mermaid source |
    | Rules check | off | flags against the repo's `CLAUDE.md` and `.claude/rules/*` |
 
-   A skipped layer writes none of its fields and gets no exploration. Chat is not part of generation.
+   A skipped layer writes none of its fields and gets no exploration (0 tokens), and the UI shows nothing for it: each layer renders only when it is listed in `tour.json` `layers`. Chat is not part of generation.
+
+   What the UI does with each layer, and what drives its cost:
+
+   | Layer | In the UI | Cost driver |
+   |---|---|---|
+   | Deep context | callers/dependents under each `impact` entry | one caller lookup (CodeGraph or grep) per changed symbol |
+   | Active review | per chapter: the `intent` teaser and a box "what do you expect to change, and where?"; the chapter opens on **Reveal**, atoms your prediction did not name are marked "not predicted", and the 2-3 break-it probes with their test snippet appear. Predictions are saved in `state.json` beside `tour.json` and never leave your machine | writing a teaser and probes (with snippets in the repo's test framework) for every chapter |
+   | Architecture delta | before/after Mermaid graph on the landing page | one graph, but it needs a read of the touched modules |
+   | Rules check | flags per block, quoting the rule and its source file | reading `CLAUDE.md` and `.claude/rules/*` once, then checking each block against them |
 4. It writes `tour.json`, runs `tour-validate` and repairs what it lists (at most 2 repair rounds), then starts `tour-serve`.
 
-Changes above about 2000 changed lines are generated in batches by directory and merged; above 10000 it suggests splitting the MR. Reading order and wording rules live in `references/writing-guide.md`; the eval case is `evals/review-cost-gate-fix-loop`.
+Changes above about 2000 changed lines are generated in batches by directory and merged; above 10000 it suggests splitting the MR. Reading order and wording rules live in `references/writing-guide.md`; the eval cases are in `evals/` (`review-cost-gate-fix-loop`, `review-active-layer`).
 
 ## Helpers (`bin/`)
 

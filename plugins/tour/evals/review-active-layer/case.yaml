@@ -1,0 +1,55 @@
+schema_version: "1.1"
+name: review-active-layer
+description: >
+  /tour:review after the cost gate answered "Active review only", with a valid base-only draft tour.json. The skill must add the
+  active layer's fields (layers lists active; every chapter has an intent teaser and 2-3 probes with test snippets), add nothing
+  of the other optional layers, and finish valid under tour-validate. Guards skills/review/SKILL.md (steps 3-5) and the active
+  paragraph of references/writing-guide.md. Needs --scaffold, --ablation none and --allow-tools Bash Write Edit.
+tags: [tour, skills, active-review, validate]
+runs: 3
+context:
+  scaffold_script: scaffold.sh
+execution:
+  model: sonnet
+  max_turns: 40
+  timeout_seconds: 900
+  allowed_tools: [Bash, Read, Write, Edit, Glob, Grep]
+  prompt: |
+    You are running the /tour:review skill. Read its SKILL.md (find the plugin's `skills/review/SKILL.md` and
+    `references/writing-guide.md` next to this repo's tour plugin) and follow it from step 3 on. State so far: `tour-fetch` ran
+    and its output is `data/meta.json`; the cost gate was asked and the user chose ONLY "Active review" (do not call
+    AskUserQuestion, the answer is final); a valid base-only draft of `tour.json` is `data/tour.json`. Keep its chapters and
+    blocks, extend it in place with what the chosen layer needs, run `bin/tour-validate` on it and repair what it lists. Do not
+    start `tour-serve`. Reply with the one-paragraph report from step 6.
+graders:
+  - name: layers-include-active
+    type: regex
+    target: {source: file, path: data/tour.json}
+    pattern: '"layers":\s*\[\s*"base"\s*,\s*"active"\s*\]'
+  - name: chapter-intent-written
+    type: regex
+    target: {source: file, path: data/tour.json}
+    pattern: '"intent"\s*:'
+  - name: probes-written
+    type: regex
+    target: {source: file, path: data/tour.json}
+    pattern: '"snippet"\s*:'
+  - name: no-other-optional-fields
+    type: regex
+    target: {source: file, path: data/tour.json}
+    pattern: '"(graph|rules_flags|callers)"\s*:'
+    match: not_contains
+  - name: validator-run
+    type: tool_used
+    tool: Bash
+    input_match: 'tour-validate'
+    min: 1
+    max: 4
+    arm: both
+  - name: no-serve
+    type: tool_used
+    tool: Bash
+    input_match: 'tour-serve'
+    min: 0
+    max: 0
+    arm: both
