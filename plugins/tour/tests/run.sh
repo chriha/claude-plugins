@@ -313,7 +313,7 @@ cp "$fx/tour.full.json" "$data/tour.json"; cp "$fx/atoms.json" "$data/atoms.json
 printf 'line1\nline2\n' > "$data/worktree/app/a.txt"; echo SECRET > "$tmp/outside/secret.txt"
 ln -s "$tmp/outside/secret.txt" "$data/worktree/app/link.txt"
 "$bin/tour-serve" "$data" --no-open > "$tmp/serve.out" 2> "$tmp/serve.err" &
-srv=$!; trap 'kill $srv 2>/dev/null; rm -rf "$tmp"' EXIT
+srv=$!; trap 'kill $srv 2>/dev/null || true; rm -rf "$tmp"' EXIT
 for _ in $(seq 50); do grep -q '^http' "$tmp/serve.out" && break; sleep 0.1; done
 url="$(head -1 "$tmp/serve.out")"
 case "$url" in http://127.0.0.1:[0-9]*/\?token=[0-9a-f]*) ;; *) fail "serve url [$url] $(cat "$tmp/serve.err")" ;; esac
@@ -438,7 +438,7 @@ cat > "$cdata/atoms.json" <<'JSON'
 ]}
 JSON
 "$bin/tour-serve" "$cdata" --no-open > "$tmp/serve2.out" 2> "$tmp/serve2.err" &
-srv2=$!; trap 'kill $srv2 2>/dev/null; rm -rf "$tmp"' EXIT
+srv2=$!; trap 'kill $srv2 2>/dev/null || true; rm -rf "$tmp"' EXIT
 for _ in $(seq 50); do grep -q '^http' "$tmp/serve2.out" && break; sleep 0.1; done
 url2="$(head -1 "$tmp/serve2.out")"; base2="${url2%%/\?*}"; tok2="${url2##*token=}"; H2=(-H "X-Tour-Token: $tok2")
 drafts='{"drafts": {
@@ -620,5 +620,11 @@ rc=0; "$bin/tour-clean" --older-than abc >/dev/null 2>&1 || rc=$?; eq "$rc" 1 "b
 rc=0; "$bin/tour-clean" --bogus >/dev/null 2>&1 || rc=$?; eq "$rc" 1 "tour-clean usage"
 cases=$((cases + 10))
 export CLAUDE_PLUGIN_DATA="$tmp/data"
+
+# --- #56 UI renders atoms without hunks (rename, binary, mode, add) instead of throwing (needs node >= 18)
+ui_out="$(node "$bin/../tests/ui-atoms.mjs" "$bin/../ui/app.js" 2>&1)" || fail "app.js throws on no-hunk atoms: $ui_out"
+case "$ui_out" in *"Could not load the tour"*) fail "no-hunk atoms: tour not loaded: $ui_out" ;; esac
+for k in rename binary mode add; do case "$ui_out" in *"· $k"*) ;; *) fail "no-hunk atom kind [$k] not shown: $ui_out" ;; esac; done
+cases=$((cases + 1))
 
 echo "tour: $cases cases ok"
