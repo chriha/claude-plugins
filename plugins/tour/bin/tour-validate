@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+# tour-validate <tour.json> <atoms.json>
+# Checks tour.json against references/tour-schema.md (shape, enums, layer rules) and enforces coverage against
+# atoms.json: every atom is assigned to exactly one block or to `mechanical`.
+# Prints nothing on success. On failure, one error per line on stderr, `<json path>: <reason>`, then a count.
+# Exit 0 valid, 1 invalid, 2 usage / unreadable / not JSON.
+set -euo pipefail
+
+[ $# -eq 2 ] || { echo "usage: tour-validate <tour.json> <atoms.json>" >&2; exit 2; }
+command -v jq >/dev/null || { echo "tour-validate: jq is required" >&2; exit 2; }
+for f in "$1" "$2"; do
+    [ -r "$f" ] || { echo "tour-validate: cannot read $f" >&2; exit 2; }
+    jq . "$f" >/dev/null 2>&1 || { echo "tour-validate: $f is not valid JSON" >&2; exit 2; }
+done
+
+# the listed layers, as a JSON array of strings (tolerant: bad shapes are reported by the main program)
+layers=$(jq -c '(.layers? // []) | if type == "array" then map(select(type == "string")) else [] end' "$1" 2>/dev/null || echo '[]')
+
+read -r -d '' PROG <<'JQ' || true
+def str(o; p; k):
+  if (o|has(k)|not) then "\(p).\(k): required field missing"
+  elif (o[k]|type) != "string" or (o[k]|length) == 0 then "\(p).\(k): must be a non-empty string"
+  else empty end;
+def enum(o; p; k; vals):
+  if (o|has(k)|not) then "\(p).\(k): required field missing"
+  elif any(vals[]; . == o[k]) then empty
+  else "\(p).\(k): invalid value \(o[k]|tojson), expected one of \(vals|map(tostring)|join("|"))" end;
+def arr(o; p; k):
+  if (o|has(k)|not) then "\(p).\(k): required field missing"
+  elif (o[k]|type) != "array" then "\(p).\(k): must be an array"
+  else empty end;
+def obj(o; p; k):
+  if (o|has(k)|not) then "\(p).\(k): required field missing"
+  elif (o[k]|type) != "object" then "\(p).\(k): must be an object"
+  else empty end;
+def strs(o; p; k):
+  arr(o; p; k),
+  (if (o|has(k)) and (o[k]|type) == "array"
+   then (o[k]|to_entries[] | select((.value|type) != "string" or (.value|length) == 0)
+         | "\(p).\(k)[\(.key)]: must be a non-empty string")
+   else empty end);
+def only_with(o; p; k; layer):
+  if (o|has(k)) and ($L|any(. == layer)|not)
+  then "\(p).\(k): only valid when layer \"\(layer)\" is listed in layers" else empty end;
+# the elements of o[k] as {v, q} (value, path); non-objects are reported here and skipped
+def items(o; p; k):
+  if (o|has(k)) and (o[k]|type) == "array"
+  then (o[k]|to_entries[] | {v: .value, q: "\(p).\(k)[\(.key)]"})
+  else empty end;
+def objs(o; p; k):
+  items(o; p; k) | if (.v|type) == "object" then . else "\(.q): must be an object" end;
+def ids_of(o; p; k): p as $p | k as $k |
+  if (o|has(k)) and (o[k]|type) == "array"
+  then (o[$k]|to_entries[] | select((.value|type) == "string") | {id: .value, path: "\($p).\($k)[\(.key)]"})
+  else empty end;
+
+def check_drift: .q as $q | .v as $v
+  | str($v; $q; "kind"), str($v; $q; "detail"), strs($v; $q; "atoms");
+def check_impact: .q as $q | .v as $v
+  | str($v; $q; "symbol"), str($v; $q; "file"), str($v; $q; "note"),
+    only_with($v; $q; "callers"; "deep"),
+    (objs($v; $q; "callers") | select(type == "object")
+      | .q as $cq | .v as $cv | str($cv; $cq; "symbol"), str($cv; $cq; "file")),
+    (objs($v; $q; "callers") | select(type == "string"));
+def check_block: .q as $q | .v as $v
+  | strs($v; $q; "atoms"),
+    (if ($v.atoms|type) == "array" and ($v.atoms|length) == 0 then "\($q).atoms: must not be empty" else empty end),
+    str($v; $q; "what"), str($v; $q; "why"),
+    enum($v; $q; "why_source"; ["ticket","mr","code","unclear"]),
+    arr($v; $q; "impact"),
+    (objs($v; $q; "impact") | select(type == "string")),
+    (objs($v; $q; "impact") | select(type == "object") | check_impact),
+    strs($v; $q; "watch"),
+    only_with($v; $q; "rules_flags"; "rules"),
+    (objs($v; $q; "rules_flags") | select(type == "string")),
+    (objs($v; $q; "rules_flags") | select(type == "object")
+      | .q as $fq | .v as $fv | str($fv; $fq; "rule"), str($fv; $fq; "source"), str($fv; $fq; "note"));
+def check_probe: .q as $q | .v as $v | str($v; $q; "question"), str($v; $q; "snippet");
+def check_chapter: .q as $q | .v as $v
+  | str($v; $q; "id"), str($v; $q; "title"), str($v; $q; "order_reason"),
+    arr($v; $q; "blocks"),
+    (if ($v.blocks|type) == "array" and ($v.blocks|length) == 0 then "\($q).blocks: must not be empty" else empty end),
+    (objs($v; $q; "blocks") | select(type == "string")),
+    (objs($v; $q; "blocks") | select(type == "object") | check_block),
+    only_with($v; $q; "intent"; "active"),
+    only_with($v; $q; "probes"; "active"),
+    (if ($L|any(. == "active")) then str($v; $q; "intent"), arr($v; $q; "probes") else empty end),
+    (objs($v; $q; "probes") | select(type == "string")),
+    (objs($v; $q; "probes") | select(type == "object") | check_probe);
+
+($atoms | if type == "array" then . elif type == "object" and (.atoms|type) == "array" then .atoms else null end) as $alist
+| if $alist == null then "atoms.json: must be an object with an \"atoms\" array (or a bare array)"
+  elif ($tour|type) != "object" then "$: must be an object"
+  else
+    ([$alist[] | select(type == "object" and (.id|type) == "string" and (.id|length) > 0) | .id]) as $ids
+    | $tour as $t
+    | (
+      ( $alist | to_entries[]
+        | select((.value|type) != "object" or (.value.id|type) != "string" or (.value.id|length) == 0)
+        | "atoms.json: atoms[\(.key)] must be an object with a non-empty string id" ),
+      ( $ids | group_by(.)[] | select(length > 1) | "atoms.json: duplicate atom id \(.[0]|tojson)" ),
+
+      enum($t; "$"; "version"; [1]),
+      arr($t; "$"; "layers"),
+      ( if ($t.layers|type) == "array" then
+          ( $t.layers | to_entries[]
+            | select(.value as $l | any(["base","deep","active","arch","rules","drift"][]; . == $l) | not)
+            | "$.layers[\(.key)]: invalid value \(.value|tojson), expected one of base|deep|active|arch|rules|drift" ),
+          ( if ($t.layers|any(. == "base")|not) then "$.layers: must include \"base\"" else empty end ),
+          ( $t.layers | group_by(.)[] | select(length > 1) | "$.layers: duplicate layer \(.[0]|tojson)" )
+        else empty end ),
+
+      obj($t; "$"; "mr"),
+      ( if ($t.mr|type) == "object" then
+          ( $t.mr as $m
+            | enum($m; "$.mr"; "platform"; ["gitlab","github"]),
+              str($m; "$.mr"; "project"),
+              ( if ($m|has("iid")|not) then "$.mr.iid: required field missing"
+                elif ($m.iid|type) != "number" or $m.iid != ($m.iid|floor) or $m.iid < 1
+                then "$.mr.iid: must be a positive integer" else empty end ),
+              str($m; "$.mr"; "title"), str($m; "$.mr"; "url"),
+              str($m; "$.mr"; "base_sha"), str($m; "$.mr"; "head_sha"),
+              ( if ($m|has("ticket")) then
+                  ( if ($m.ticket|type) != "object" then "$.mr.ticket: must be an object or absent"
+                    else str($m.ticket; "$.mr.ticket"; "id"), str($m.ticket; "$.mr.ticket"; "summary") end )
+                else empty end ) )
+        else empty end ),
+
+      obj($t; "$"; "summary"),
+      ( if ($t.summary|type) == "object" then
+          str($t.summary; "$.summary"; "intent"), str($t.summary; "$.summary"; "approach"),
+          enum($t.summary; "$.summary"; "risk"; ["low","medium","high"]),
+          strs($t.summary; "$.summary"; "risk_reasons")
+        else empty end ),
+
+      only_with($t; "$"; "drift"; "drift"),
+      ( if ($L|any(. == "drift")) then arr($t; "$"; "drift") else empty end ),
+      ( objs($t; "$"; "drift") | select(type == "string") ),
+      ( objs($t; "$"; "drift") | select(type == "object") | check_drift ),
+      only_with($t; "$"; "graph"; "arch"),
+      ( if ($L|any(. == "arch")) then
+          obj($t; "$"; "graph"),
+          ( if ($t.graph|type) == "object" then str($t.graph; "$.graph"; "mermaid") else empty end )
+        else empty end ),
+
+      arr($t; "$"; "chapters"),
+      ( if ($t.chapters|type) == "array" and ($t.chapters|length) == 0 then "$.chapters: must not be empty" else empty end ),
+      ( if ($t.chapters|type) == "array" then
+          ( [$t.chapters[] | select(type == "object" and (.id|type) == "string") | .id]
+            | group_by(.)[] | select(length > 1) | "$.chapters: duplicate chapter id \(.[0]|tojson)" )
+        else empty end ),
+      ( objs($t; "$"; "chapters") | select(type == "string") ),
+      ( objs($t; "$"; "chapters") | select(type == "object") | check_chapter ),
+
+      obj($t; "$"; "mechanical"),
+      ( if ($t.mechanical|type) == "object" then
+          strs($t.mechanical; "$.mechanical"; "atoms"), str($t.mechanical; "$.mechanical"; "note")
+        else empty end ),
+
+      # coverage: every atom exactly once in blocks[].atoms or mechanical.atoms; drift atoms must exist
+      ( [ ( items($t; "$"; "chapters") | select(.v|type == "object") | .q as $cq
+            | items(.v; $cq; "blocks") | select(.v|type == "object") | . as $b | ids_of($b.v; $b.q; "atoms") ),
+          ( if ($t.mechanical|type) == "object" then ids_of($t.mechanical; "$.mechanical"; "atoms") else empty end )
+        ] as $assigned
+        | [ items($t; "$"; "drift") | select(.v|type == "object") | . as $b | ids_of($b.v; $b.q; "atoms") ] as $refs
+        | ( $assigned[] | select(.id as $i | $ids|any(. == $i)|not)
+            | "\(.path): unknown atom id \(.id|tojson) (not in atoms.json)" ),
+          ( $refs[] | select(.id as $i | $ids|any(. == $i)|not)
+            | "\(.path): unknown atom id \(.id|tojson) (not in atoms.json)" ),
+          ( $assigned | map(select(.id as $i | $ids|any(. == $i))) | group_by(.id)[] | select(length > 1)
+            | .[0] as $f | .[1:][] | "\(.path): atom \(.id|tojson) is assigned twice (first at \($f.path))" ),
+          ( $ids | unique[] | . as $i | select($assigned|any(.id == $i)|not)
+            | "$: atom \($i|tojson) is not assigned to any block or to mechanical" ) )
+    )
+  end
+JQ
+
+errs=$(jq -rn --slurpfile tour_ "$1" --slurpfile atoms_ "$2" --argjson L "$layers" \
+    '$tour_[0] as $tour | $atoms_[0] as $atoms | '"$PROG") || { echo "tour-validate: internal jq error" >&2; exit 2; }
+if [ -n "$errs" ]; then
+    printf '%s\n' "$errs" >&2
+    echo "tour-validate: $(printf '%s\n' "$errs" | wc -l | tr -d ' ') error(s) in $1" >&2
+    exit 1
+fi
