@@ -524,10 +524,17 @@ chat "$ch" 'again' >/dev/null
 eq "$(grep '^data:' "$tmp/body" | tail -1 | sed 's/^data: //' | jq -r .error)" "rate limited, resets at 5pm" "result error shown verbatim"
 rm "$FIX/claude-error-result"
 eq "$(grep -c '^claude ' "$STUB_LOG")" $((n + 2)) "one spawn per message, no retry"
+# a failed first turn stores no session, so the next turn still sends the chapter context
+rm -f "$chdata/chat/$ch.json"; touch "$FIX/claude-error-result"
+chat "$ch" 'first' >/dev/null
+eq "$(jq -r '.session' "$chdata/chat/$ch.json")" null "failed first turn keeps no session"
+rm "$FIX/claude-error-result"
+chat "$ch" 'retry by hand' >/dev/null
+grep -q 'Validate the import payload' "$FIX/claude-stdin.$(grep -c '^claude ' "$STUB_LOG")" || fail "next turn after a failed first one re-sends the chapter"
 eq "$(chat nope 'x')" 404 "unknown chapter"
 eq "$(chat "$ch" ' ')" 400 "empty message"
 eq "$(code -X POST -d '{}' "$base3/api/chat")" 403 "chat needs the token"
-cases=$((cases + 19))
+cases=$((cases + 21))
 kill "$srv3" 2>/dev/null || true
 
 echo "tour: $cases cases ok"
