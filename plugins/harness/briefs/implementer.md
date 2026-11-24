@@ -17,6 +17,9 @@ fork) with an explicit `model:`, read-only (no edits, no commits, no tracker wri
 transcript — and ends with the reply format below; it replies with only that. Never consult outside these points, never "when it
 feels big". Your session already runs on opus (the triage row's model) → answer the opus consults yourself, no spawn.
 Note each consult's role, model, trigger and token use for `## Review`.
+**Waiting:** spawn consults with `run_in_background: true` and wait for their completion notifications. Never poll a helper's
+`*.output` transcript or log (no `until grep … end_turn` loops, no background shell that watches it): a helper that hands back via a
+tool call never logs `end_turn`, so such a loop never ends. Don't read agent transcripts.
 
 - **Haiku auditors** (`model: "haiku"`) — mechanical lists, never conclusions; verify every hit yourself before acting on it.
   - **Lookup** (any time, instead of reading many files yourself): every caller of a symbol, or the sibling files that follow a
