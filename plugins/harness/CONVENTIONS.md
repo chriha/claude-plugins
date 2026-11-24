@@ -77,6 +77,8 @@ implementer brief (§ Consults) and `harness-retro` follow it. There is no per-p
 The implementer session is the only agent that writes code. It calls short-lived consult sub-agents; each prompt carries the
 ticket, the specific question, the relevant findings and the diff — never the session transcript — and the brief fixes the reply
 format. A session that already runs on opus answers the opus consults itself, no spawn.
+The implementer waits for consults through their completion notifications (`run_in_background: true`); it never polls their
+transcript/output files or starts a shell loop on them.
 - **Haiku auditor** — mechanical, checkable work only; replies are lists of `file:line`, never conclusions: the Self-check audits
   over the diff (functions that don't exist, duplicated helpers, swallowed errors, unquoted shell/SQL), caller and sibling-pattern
   lookups, the scope/size check (files the ticket doesn't name, the ~400-line limit). Run in parallel in one message. Gate

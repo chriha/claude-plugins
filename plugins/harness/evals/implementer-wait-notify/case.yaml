@@ -1,0 +1,27 @@
+schema_version: "1.1"
+name: implementer-wait-notify
+description: >
+  How the implementer waits for its consult sub-agents (briefs/implementer.md, Consults): background spawn plus completion
+  notification, never a poll loop on transcript/output files (issue 66). Answered from the brief text, no run.
+tags: [implementer, briefs]
+runs: 3
+context:
+  scaffold_script: scaffold.sh
+execution:
+  model: sonnet
+  max_turns: 20
+  timeout_seconds: 300
+  allowed_tools: [Bash, Read, Glob, Grep]
+  prompt: |
+    Run `harness-resolve briefs/implementer.md` to find the implementer brief and read its Consults section. Do not run the
+    workflow or call Agent; only answer from the text. Reply with exactly two lines:
+    `wait for consults via: <mechanism>`, `poll consult output files with an until/grep loop: <yes|no>`.
+graders:
+  - name: waits-for-notification
+    type: regex
+    pattern: '^wait for consults via:(?=.*notification)'
+    flags: mi
+  - name: no-poll-loop
+    type: regex
+    pattern: '^poll consult output files with an until/grep loop:\s*no\b'
+    flags: mi
