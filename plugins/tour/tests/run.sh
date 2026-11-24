@@ -509,6 +509,7 @@ cat > "$tmp/stubs/claude-stub" <<'STUB'
 echo "claude $* | cwd=$(pwd -P) | key=${ANTHROPIC_API_KEY:-unset}" >> "$STUB_LOG"
 cat > "$FIX/claude-stdin.$(grep -c '^claude ' "$STUB_LOG")"
 if [ -e "$FIX/claude-fail" ]; then echo "Claude usage limit reached" >&2; exit 1; fi
+if [ -e "$FIX/claude-stale" ] && [[ " $* " == *" --resume "* ]]; then echo "No conversation found with session ID: sess-1234-abcd" >&2; exit 1; fi
 if [ -e "$FIX/claude-error-result" ]; then echo '{"type":"result","is_error":true,"result":"rate limited, resets at 5pm","session_id":"sess-0000-aaaa"}'; exit 1; fi
 echo '{"type":"system","subtype":"init","session_id":"sess-1234-abcd"}'
 echo '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hel"}},"session_id":"sess-1234-abcd"}'
@@ -562,10 +563,17 @@ eq "$(jq -r '.session' "$chdata/chat/$ch.json")" null "failed first turn keeps n
 rm "$FIX/claude-error-result"
 chat "$ch" 'retry by hand' >/dev/null
 grep -q 'Validate the import payload' "$FIX/claude-stdin.$(grep -c '^claude ' "$STUB_LOG")" || fail "next turn after a failed first one re-sends the chapter"
+# a stored session that --resume rejects is cleared, so the next turn starts fresh with the chapter context
+eq "$(jq -r .session "$chdata/chat/$ch.json")" sess-1234-abcd "a session is stored before the stale resume"
+touch "$FIX/claude-stale"; chat "$ch" 'stale' >/dev/null; rm "$FIX/claude-stale"
+eq "$(jq -r '.session' "$chdata/chat/$ch.json")" null "a rejected resume clears the stored session"
+chat "$ch" 'fresh again' >/dev/null
+grep -q 'Validate the import payload' "$FIX/claude-stdin.$(grep -c '^claude ' "$STUB_LOG")" || fail "next turn after a rejected resume re-sends the chapter"
+case "$(grep '^claude ' "$STUB_LOG" | tail -1)" in *--resume*) fail "turn after a rejected resume must not resume" ;; esac
 eq "$(chat nope 'x')" 404 "unknown chapter"
 eq "$(chat "$ch" ' ')" 400 "empty message"
 eq "$(code -X POST -d '{}' "$base3/api/chat")" 403 "chat needs the token"
-cases=$((cases + 21))
+cases=$((cases + 25))
 kill "$srv3" 2>/dev/null || true
 
 # --- #46 tour-fetch reports the previous head's tour; tour-delta diffs atoms across heads
