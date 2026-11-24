@@ -164,7 +164,7 @@ async function chat(req, res, body) {
   const chatState = readChat(ch.id);
   const session = /^[0-9A-Za-z-]{8,64}$/.test(chatState.session ?? '') ? chatState.session : null;
   const cargs = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--tools', READ_ONLY_TOOLS, '--allowedTools', READ_ONLY_TOOLS, ...(session ? ['--resume', session] : [])];
-  const prior = chatState.session; // a failed turn may not have seen the chapter context: keep only a session an earlier success stored
+  const prior = chatState.session; // a failed turn may not have seen the chapter context: keep only a session an earlier success stored, unless --resume rejected it (then clear it)
   chatting.add(ch.id);
   res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
   const emit = (o) => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(o)}\n\n`); };
@@ -188,7 +188,7 @@ async function chat(req, res, body) {
     if (buf.trim()) line(buf);
     const err = spawnErr ? `could not run ${claudeBin}: ${spawnErr.message}` : errText || (code ? (stderr.trim() || `${claudeBin} exited with code ${code}`) : '');
     const messages = [...chatState.messages, { role: 'user', text: msg.message }, ...(reply ? [{ role: 'assistant', text: reply }] : []), ...(err ? [{ role: 'error', text: err }] : [])];
-    try { writeChat(ch.id, { session: (err ? prior : chatState.session) ?? null, messages }); } catch {}
+    try { writeChat(ch.id, { session: (err ? (session && /no conversation found/i.test(err) ? null : prior) : chatState.session) ?? null, messages }); } catch {}
     emit(err ? { type: 'error', error: err } : { type: 'done' });
     res.end();
   };
